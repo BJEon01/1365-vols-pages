@@ -25,17 +25,21 @@ jobs:
         env:
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
 
-          # ====== 처음엔 넓게 가져와 데이터가 0건이 아닌지 확인 ======
-          SIDO_CODE: "6110000"   # 서울
-          GUGUN_CODE: ""         # 전체
-          PROGRM_STTUS_SE: ""    # (모집중) API 필터 해제
-          OFFSET_BG: "-30"       # 오늘-30일
-          OFFSET_ED: "60"        # 오늘+60일
-          KEYWORD: ""
-          MAX_PAGES: "30"
-
-          # 로컬 보정 필터 해제 (오늘이 모집기간 안인지 검사 X)
+          # ====== 모집기간 조건(현재 설정) ======
+          # 넓게 수집: 오늘-30 ~ 오늘+60, '모집중' 고정 안함, 로컬 보정(오늘 포함) 안함
+          OFFSET_BG: "-30"
+          OFFSET_ED: "60"
+          PROGRM_STTUS_SE: ""
           RECRUITING_ONLY: "false"
+
+          # 지역/키워드(필요시 조정)
+          SIDO_CODE: "6110000"   # 서울 (비우면 전국)
+          GUGUN_CODE: ""
+          KEYWORD: ""
+
+          # 최대 5,000건까지
+          PER: "100"
+          MAX_PAGES: "50"
 
           # 상세 파싱 동시성/지연(필요 시 조정)
           DETAIL_CONCURRENCY: "16"

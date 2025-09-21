@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2025-09-21T12:54:17.043Z",
+  "updatedAt": "2025-09-21T15:17:59.272Z",
   "params": {
     "USE_NOTICE_RANGE": false,
     "NOTICE_BG": "20250921",
@@ -22,10 +22,10 @@
   },
   "stat": {
     "filledApi": 0,
-    "filledDetail": 392,
-    "stillEmpty": 21,
+    "filledDetail": 1,
+    "stillEmpty": 20,
     "total": 1984,
-    "triedDetail": 413
+    "triedDetail": 21
   },
   "count": 1984,
   "items": [
@@ -388,7 +388,7 @@
       "progrmEndde": 20250923,
       "noticeBgnde": 20250903,
       "noticeEndde": 20250921,
-      "rcritNmpr": "",
+      "rcritNmpr": "20",
       "mnnstNm": "",
       "nanmmbyNm": "(사)한국원예치료복지협회 서울지회",
       "actPlace": " aT화훼사업센터 본관 2층(서울시 서초구 강남대로 27)",

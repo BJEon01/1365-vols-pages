@@ -3,52 +3,39 @@ name: Fetch 1365 data
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 0 * * *" # 매일 09:15 KST (=00:15 UTC)
+    # KST 00/04/08/12/16/20  →  UTC 15/19/23/03/07/11
+    - cron: "0 3,7,11,15,19,23 * * *"
+
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: fetch-1365
+      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
+        with: { node-version: 20 }
       - name: Install deps
         run: npm i axios xml2js
-
       - name: Run fetch
         env:
-  # API 키
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
-        
-          # 서울특별시로 한정
           SIDO_CODE: "6110000"
           GUGUN_CODE: ""
-        
-          # 모집중만
           PROGRM_STTUS_SE: "2"
-        
-          # 공지/모집기간(range) 파라미터 아예 제거
           USE_NOTICE_RANGE: "false"
-        
-          # (선택) 로컬에서 '오늘이 notice 기간 포함' 필터는 끄기
           RECRUITING_ONLY: "false"
-        
-          # 페이징
           PER: "100"
           MAX_PAGES: "50"
-
-          # 상세 파싱 동시성/지연(필요 시 조정)
           DETAIL_CONCURRENCY: "16"
           DETAIL_DELAY_MS: "0"
           MAX_DETAIL: "999999"
         run: node scripts/fetch_1365.mjs
-
       - name: Commit & push
         run: |
           git config user.name  "github-actions[bot]"

@@ -21,7 +21,7 @@ jobs:
           # NOTICE_BG: "20250101"   # 필요시 고정
           # NOTICE_ED: "20251231"
           # KEYWORD:   "환경"       # 선택
-        run: node scripts/fetch_1365.js
+        run: node scripts/fetch_1365.mjs
       - name: Commit & push
         run: |
           git config user.name  "github-actions[bot]"

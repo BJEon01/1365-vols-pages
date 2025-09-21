@@ -1,0 +1,31 @@
+name: Fetch 1365 data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 0 * * *" # 매일 09:15 KST(=00:15 UTC)쯤
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i axios xml2js
+      - name: Run fetch
+        env:
+          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+          # NOTICE_BG: "20250101"   # 필요시 고정
+          # NOTICE_ED: "20251231"
+          # KEYWORD:   "환경"       # 선택
+        run: node scripts/fetch_1365.js
+      - name: Commit & push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data/1365.json
+          git commit -m "chore(data): refresh 1365.json" || echo "no changes"
+          git push

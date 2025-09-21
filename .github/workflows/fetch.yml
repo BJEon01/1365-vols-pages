@@ -1,47 +1,46 @@
-name: Fetch 1365 data (fast)
+name: Fetch 1365 data
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 0 * * *"   # 매일 09:15 KST
+    - cron: "15 0 * * *" # 매일 09:15 KST (=00:15 UTC)
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with:
+          node-version: 20
 
-      # 의존성은 가볍게 유지 (cheerio 필요 없음)
-      - run: npm i axios xml2js
+      - name: Install deps
+        run: npm i axios xml2js
 
-      - name: Run fetch (Seoul / recruiting / today~+30)
+      - name: Run fetch
         env:
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
 
-          # 모집기간 = 오늘 ~ 오늘+30
-          OFFSET_BG: "0"
-          OFFSET_ED: "30"
-
-          # 지역(서울) + 상태(모집중)
-          SIDO_NAME:  "서울특별시"   # (선택) 텍스트 보정 필터
-          SIDO_CODE:  "6110000"     # 서울 시도코드
-          GUGUN_CODE: ""            # 전체
-          PROGRM_STTUS_SE: "2"      # 1:모집완료, 2:모집중(문서 기준)
-
-          # 페이지/키워드
-          PER: "100"
-          MAX_PAGES: "50"
+          # ====== 처음엔 넓게 가져와 데이터가 0건이 아닌지 확인 ======
+          SIDO_CODE: "6110000"   # 서울
+          GUGUN_CODE: ""         # 전체
+          PROGRM_STTUS_SE: ""    # (모집중) API 필터 해제
+          OFFSET_BG: "-30"       # 오늘-30일
+          OFFSET_ED: "60"        # 오늘+60일
           KEYWORD: ""
+          MAX_PAGES: "30"
 
-          # 상세 파싱 성능옵션
-          DETAIL_CONCURRENCY: "16"  # 8~24 권장
+          # 로컬 보정 필터 해제 (오늘이 모집기간 안인지 검사 X)
+          RECRUITING_ONLY: "false"
+
+          # 상세 파싱 동시성/지연(필요 시 조정)
+          DETAIL_CONCURRENCY: "16"
           DETAIL_DELAY_MS: "0"
-          MAX_DETAIL: "999999"      # 최초 1회 크게
-
+          MAX_DETAIL: "999999"
         run: node scripts/fetch_1365.mjs
 
       - name: Commit & push
@@ -49,5 +48,5 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/data/1365.json docs/data/recruit_cache.json
-          git commit -m "chore(data): refresh 1365.json (fast)" || echo "no changes"
+          git commit -m "chore(data): refresh 1365.json" || echo "no changes"
           git push

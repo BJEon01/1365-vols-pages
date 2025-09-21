@@ -1,210 +1,248 @@
 <!doctype html>
 <html lang="ko">
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>1365 모집인원 정리</title>
-<style>
-  body{font:14px/1.4 system-ui,apple sd gothic neo,malgun gothic,sans-serif;margin:24px;}
-  table{width:100%;border-collapse:collapse;margin-top:12px}
-  th,td{border:1px solid #ddd;padding:8px;text-align:left}
-  th{position:sticky;top:0;background:#fafafa}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  input,select,button{padding:6px 8px}
-  footer{margin-top:16px;color:#666}
-</style>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>1365 모집 현황(빠른 뷰어)</title>
+  <style>
+    :root { --fg:#1f2328; --muted:#57606a; --line:#d0d7de; --bg:#fff; --accent:#0969da;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;margin:0;color:var(--fg);background:var(--bg);}
+    header{padding:16px 20px;border-bottom:1px solid var(--line)}
+    header h1{font-size:18px;margin:0 0 8px}
+    .meta{font-size:12px;color:var(--muted)}
+    main{padding:16px 20px}
+    .toolbar{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin:0 0 12px}
+    label{font-size:12px;color:var(--muted);display:block;margin:0 0 4px}
+    input[type="date"],input[type="number"],input[type="text"]{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px}
+    .btns{display:flex;gap:8px;align-items:end}
+    button{border:1px solid var(--line);background:#f6f8fa;padding:9px 14px;border-radius:10px;font-size:14px;cursor:pointer}
+    button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .summary{margin:10px 0 14px;font-size:13px;color:var(--muted)}
+    table{width:100%;border-collapse:collapse;border:1px solid var(--line)}
+    thead th{position:sticky;top:0;background:#f6f8fa;border-bottom:1px solid var(--line);padding:10px 8px;text-align:left;font-size:13px}
+    tbody td{border-top:1px solid var(--line);padding:9px 8px;font-size:13px;vertical-align:top}
+    tbody tr:hover{background:#fffdf7}
+    .num{text-align:right;width:80px}
+    .nowrap{white-space:nowrap}
+    .muted{color:var(--muted)}
+    .link{color:var(--accent);text-decoration:none}
+    .link:hover{text-decoration:underline}
+    .error{color:#b42318;background:#ffefef;border:1px solid #ffcccc;padding:10px;border-radius:8px;margin:10px 0}
+    .foot{margin:14px 0 0;font-size:12px;color:var(--muted)}
+    .chips{display:flex;gap:8px;flex-wrap:wrap}
+    .chip{border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:12px;background:#fff}
+    @media (max-width:760px){ .hide-sm{display:none} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>1365 모집 현황</h1>
+    <div class="meta">
+      마지막 업데이트: <span id="last-updated">-</span>
+      · 총 수집: <span id="total-count">0</span>건
+      · 현재 표시: <span id="shown-count">0</span>건
+      · <a class="link" href="data/1365.json" target="_blank" rel="noopener">원본 JSON</a>
+    </div>
+    <div id="load-error" class="error" style="display:none"></div>
+  </header>
 
-<h1>1365 모집인원 정리 (github.io)</h1>
+  <main>
+    <div class="toolbar">
+      <div>
+        <label>봉사기간 (시작)</label>
+        <input type="date" id="f-from" />
+      </div>
+      <div>
+        <label>봉사기간 (종료)</label>
+        <input type="date" id="f-to" />
+      </div>
+      <div>
+        <label>키워드 (제목/기관/장소)</label>
+        <input type="text" id="f-keyword" placeholder="예: 환경, 청소년, 독거…" />
+      </div>
+      <div>
+        <label>모집인원 (이상)</label>
+        <input type="number" id="f-min" placeholder="0" min="0" step="1" />
+      </div>
+      <div>
+        <label>봉사지역 (키워드)</label>
+        <input type="text" id="f-region" placeholder="예: 강남, 은평, 서울…" />
+      </div>
+      <div class="btns">
+        <button class="primary" id="btn-search">검색</button>
+        <button id="btn-reset">초기화</button>
+      </div>
+    </div>
 
-<div class="row">
-  <label>키워드:
-    <input id="kw" placeholder="봉사명/기관명 포함 검색"/>
-  </label>
+    <div class="summary">
+      <span id="chips" class="chips"></span>
+    </div>
 
-  <label>봉사 시작 ≥
-    <input id="vb" type="date"/>
-  </label>
+    <table>
+      <thead>
+        <tr>
+          <th class="nowrap">프로그램번호</th>
+          <th>제목</th>
+          <th class="nowrap hide-sm">모집기간</th>
+          <th class="nowrap">봉사기간</th>
+          <th class="num">모집인원</th>
+          <th class="hide-sm">모집기관</th>
+          <th class="hide-sm">등록기관</th>
+          <th>장소/지역</th>
+        </tr>
+      </thead>
+      <tbody id="table-body">
+        <tr><td colspan="8" class="muted" style="text-align:center">로딩 중…</td></tr>
+      </tbody>
+    </table>
 
-  <label>봉사 종료 ≤
-    <input id="ve" type="date"/>
-  </label>
+    <p class="foot">
+      * 모집인원은 목록 API에 없을 경우 상세페이지에서 보강 수집됩니다. 일부 항목은 빈 값일 수 있어요.
+    </p>
+  </main>
 
-  <label>모집인원 ≥
-    <input id="minr" type="number" min="0" step="1" style="width:90px" placeholder="예: 10"/>
-  </label>
+  <script>
+    // ---------- 유틸 ----------
+    const z = n => (n<10? '0'+n : ''+n);
+    const fmtDate = (y8) => (typeof y8 === 'string' && y8.length===8)
+      ? `${y8.slice(0,4)}-${y8.slice(4,6)}-${y8.slice(6,8)}` : (y8 || '');
+    const strip = s => (s||'').toString().trim();
+    const toYmd = (yyyy_mm_dd) => strip(yyyy_mm_dd).replaceAll('-', '');
+    const overlap = (aStart, aEnd, bStart, bEnd) => {
+      // 문자열(YYYYMMDD) 비교. 빈 값이면 무제한
+      if (bStart && aEnd && aEnd < bStart) return false;
+      if (bEnd && aStart && aStart > bEnd) return false;
+      return true;
+    };
+    const makeChip = (label, value) => value ? `<span class="chip">${label}: ${value}</span>` : '';
 
-  <label>봉사지역:
-    <select id="region">
-      <option value="">전체</option>
-    </select>
-  </label>
+    // ---------- 데이터 로딩 ----------
+    let ALL = [];
+    async function loadJson() {
+      const base = location.pathname.endsWith('/') ? location.pathname
+        : location.pathname.replace(/\/[^\/]*$/, '/');
+      const url = new URL('data/1365.json?v=' + Date.now(), location.origin + base).toString();
 
-  <button id="search">검색</button>
-  <button id="sort">모집인원↓</button>
-  <button id="csv">CSV 다운로드</button>
-  <button id="reset">초기화</button>
-</div>
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
 
-<div id="meta"></div>
+        document.getElementById('last-updated').textContent = data?.updatedAt || '';
+        document.getElementById('total-count').textContent = data?.count ?? 0;
 
-<table id="tbl">
-  <thead><tr>
-    <th>봉사명</th>
-    <th>봉사기간</th>
-    <th>모집기간</th>
-    <th>모집인원</th>
-    <th>모집기관</th>
-    <th>등록기관</th>
-    <th>ID</th>
-  </tr></thead>
-  <tbody></tbody>
-</table>
+        ALL = Array.isArray(data?.items) ? data.items : [];
+        // 초기 표시: 전체
+        render(ALL);
+      } catch (e) {
+        console.error('JSON 로드 실패', e);
+        const box = document.getElementById('load-error');
+        box.style.display = 'block';
+        box.textContent = '데이터를 불러오지 못했습니다: ' + (e.message || e);
+        document.getElementById('table-body').innerHTML =
+          `<tr><td colspan="8" class="muted" style="text-align:center">데이터 로드 실패</td></tr>`;
+      }
+    }
 
-<footer>※ 데이터는 GitHub Actions로 주기적으로 새로고침됩니다.</footer>
+    // ---------- 필터 ----------
+    function getFilters() {
+      return {
+        from: toYmd(document.getElementById('f-from').value),
+        to:   toYmd(document.getElementById('f-to').value),
+        kw:   strip(document.getElementById('f-keyword').value).toLowerCase(),
+        min:  Number(document.getElementById('f-min').value || 0),
+        region: strip(document.getElementById('f-region').value).toLowerCase()
+      };
+    }
 
-<script>
-const z = s => (s===0 ? "0" : (s?.toString().trim() || ""));
-const dstr = s => (typeof s === "string" && /^\d{8}$/.test(s))
-  ? `${s.slice(0,4)}.${s.slice(4,6)}.${s.slice(6)}`
-  : z(s);
-const toInt = v => {
-  const n = parseInt(String(v ?? "").replace(/,/g,""), 10);
-  return Number.isFinite(n) ? n : 0;
-};
+    function applyFilter(rows, f) {
+      return rows.filter(r => {
+        const sj = strip(r.progrmSj).toLowerCase();
+        const org1 = strip(r.mnnstNm).toLowerCase();
+        const org2 = strip(r.nanmmbyNm).toLowerCase();
+        const place = strip(r.actPlace).toLowerCase();
+        const nb = strip(r.noticeBgnde), ne = strip(r.noticeEndde);
+        const pb = strip(r.progrmBgnde), pe = strip(r.progrmEndde);
+        const rn = Number(r.rcritNmpr || 0);
 
-// YYYYMMDD 범위 체크 (값이 없으면 통과)
-function inRange(ymd, from, to){
-  if (!/^\d{8}$/.test(ymd || "")) return true;
-  const f = from ? from.replaceAll("-","") : "";
-  const t = to   ? to.replaceAll("-","") : "";
-  return (!f || ymd >= f) && (!t || ymd <= t);
-}
+        // 키워드: 제목/기관/장소 중 하나라도 포함
+        const okKw = !f.kw || (sj.includes(f.kw) || org1.includes(f.kw) || org2.includes(f.kw) || place.includes(f.kw));
+        // 지역 키워드
+        const okRegion = !f.region || (place.includes(f.region) || org1.includes(f.region) || org2.includes(f.region));
+        // 최소 모집인원
+        const okMin = rn >= f.min;
+        // 봉사기간 겹침
+        const okPeriod = overlap(pb, pe, f.from, f.to);
 
-// 상세페이지 링크
-function makeDetailUrl(id){
-  return `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?progrmRegistNo=${encodeURIComponent(id||"")}&type=show`;
-}
+        return okKw && okRegion && okMin && okPeriod;
+      });
+    }
 
-// 지역 추정 (액션에서 region 필드를 넣었으면 그걸 우선 사용)
-const REGION_PAT = /(서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원특별자치도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)/;
-function guessRegion(it){
-  if (it.region) return it.region;
-  const text = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
-  const m = text.match(REGION_PAT);
-  return m ? m[1] : "";
-}
+    function resetFilters() {
+      document.getElementById('f-from').value = '';
+      document.getElementById('f-to').value = '';
+      document.getElementById('f-keyword').value = '';
+      document.getElementById('f-min').value = '';
+      document.getElementById('f-region').value = '';
+    }
 
-let ALL = [];         // 전체 원본
-let VIEW = [];        // 현재 화면 행
-let sortDesc = true;  // 모집인원 내림차순 기본
+    // ---------- 렌더 ----------
+    function render(rows) {
+      const tbody = document.getElementById('table-body');
+      document.getElementById('shown-count').textContent = rows.length;
 
-function renderTable(rows){
-  const tb = document.querySelector("#tbl tbody");
-  tb.innerHTML = rows.map(it => `
-    <tr>
-      <td><a href="${makeDetailUrl(it.progrmRegistNo)}" target="_blank" rel="noopener">${z(it.progrmSj)}</a></td>
-      <td>${dstr(it.progrmBgnde)} ~ ${dstr(it.progrmEndde)}</td>
-      <td>${dstr(it.noticeBgnde)} ~ ${dstr(it.noticeEndde)}</td>
-      <td>${z(it.rcritNmpr ?? it.recruit ?? "")}</td>
-      <td>${z(it.mnnstNm)}</td>
-      <td>${z(it.nanmmbyNm)}</td>
-      <td>${z(it.progrmRegistNo)}</td>
-    </tr>`).join("");
-}
+      // 필터 칩
+      const f = getFilters();
+      document.getElementById('chips').innerHTML = [
+        makeChip('기간', (f.from?f.from:'~') + ' ~ ' + (f.to?f.to:'~')).replace(/~ ~/,'전체'),
+        makeChip('키워드', f.kw),
+        makeChip('모집인원≥', f.min ? String(f.min) : ''),
+        makeChip('지역', f.region)
+      ].filter(Boolean).join('');
 
-function applyFilters(){
-  const kw    = document.querySelector("#kw").value.toLowerCase();
-  const vb    = document.querySelector("#vb").value;  // 봉사 시작
-  const ve    = document.querySelector("#ve").value;  // 봉사 종료
-  const minr  = toInt(document.querySelector("#minr").value);
-  const reg   = document.querySelector("#region").value;
+      if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center">표시할 데이터가 없습니다.</td></tr>`;
+        return;
+      }
 
-  let rows = ALL.filter(it => {
-    const text = `${it.progrmSj||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`.toLowerCase();
+      // 성능: 한 번의 innerHTML로 렌더
+      tbody.innerHTML = rows.map(r => {
+        const pid = r.progrmRegistNo;
+        const link = `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(pid)}`;
+        return `
+          <tr>
+            <td class="nowrap">${pid}</td>
+            <td><a class="link" href="${link}" target="_blank" rel="noopener">${escapeHtml(r.progrmSj || '')}</a></td>
+            <td class="nowrap hide-sm">${fmtDate(r.noticeBgnde)} ~ ${fmtDate(r.noticeEndde)}</td>
+            <td class="nowrap">${fmtDate(r.progrmBgnde)} ~ ${fmtDate(r.progrmEndde)}</td>
+            <td class="num">${Number(r.rcritNmpr || 0)}</td>
+            <td class="hide-sm">${escapeHtml(r.mnnstNm || '')}</td>
+            <td class="hide-sm">${escapeHtml(r.nanmmbyNm || '')}</td>
+            <td>${escapeHtml(r.actPlace || '')}</td>
+          </tr>
+        `;
+      }).join('');
+    }
 
-    const okKw  = (!kw || text.includes(kw));
-    const okVol = inRange(it.progrmBgnde, vb, ve) && inRange(it.progrmEndde, vb, ve);
-    const r     = toInt(it.rcritNmpr ?? it.recruit);
-    const okR   = (isNaN(minr) || minr===0) ? true : (r >= minr);
-    const region = guessRegion(it);
-    const okReg  = (!reg || region === reg);
+    function escapeHtml(s){
+      return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
 
-    return okKw && okVol && okR && okReg;
-  });
+    // ---------- 이벤트 ----------
+    document.getElementById('btn-search').addEventListener('click', () => {
+      render(applyFilter(ALL, getFilters()));
+    });
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      resetFilters();
+      render(ALL);
+    });
+    document.getElementById('f-keyword').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); render(applyFilter(ALL, getFilters())); }
+    });
 
-  rows.sort((a,b) => (toInt(b.rcritNmpr ?? b.recruit) - toInt(a.rcritNmpr ?? a.recruit)) * (sortDesc ? 1 : -1));
-  VIEW = rows;
-  renderTable(rows);
-}
-
-function exportCSV(rows){
-  const header = ["봉사명","봉사기간","모집기간","모집인원","모집기관","등록기관","ID"];
-  const esc = v => `"${String(v??"").replace(/"/g,'""')}"`;
-  const lines = [header.map(esc).join(",")];
-  rows.forEach(it=>{
-    lines.push([
-      it.progrmSj,
-      `${dstr(it.progrmBgnde)} ~ ${dstr(it.progrmEndde)}`,
-      `${dstr(it.noticeBgnde)} ~ ${dstr(it.noticeEndde)}`,
-      (it.rcritNmpr ?? it.recruit ?? ""),
-      it.mnnstNm, it.nanmmbyNm, it.progrmRegistNo
-    ].map(esc).join(","));
-  });
-  const blob = new Blob([lines.join("\r\n")], {type:"text/csv;charset=utf-8"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "1365_results.csv";
-  document.body.appendChild(a); a.click(); a.remove();
-}
-
-(async function init(){
-  const meta = document.querySelector("#meta");
-
-  // 데이터 로드
-  let payload;
-  try{
-    const res = await fetch("data/1365.json", { cache: "no-store" });
-    if(!res.ok) throw new Error("load fail");
-    payload = await res.json();
-  }catch(e){
-    meta.textContent = "data/1365.json 이 아직 없습니다. Actions에서 Fetch 워크플로우를 먼저 실행하세요.";
-    return;
-  }
-
-  ALL = Array.isArray(payload.items) ? payload.items : [];
-  meta.textContent = `업데이트: ${payload.updatedAt ? new Date(payload.updatedAt).toLocaleString() : "—"} · 총 ${ALL.length}건`;
-
-  // 지역 옵션 구성(데이터에서 자동 수집)
-  const set = new Set();
-  ALL.forEach(it => { const g = guessRegion(it); if (g) set.add(g); });
-  const opts = [...set].sort();
-  const sel = document.querySelector("#region");
-  opts.forEach(v => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = v;
-    sel.appendChild(o);
-  });
-
-  // 버튼 이벤트
-  document.querySelector("#search").onclick = applyFilters; // ← 검색 버튼 눌러야 반영
-  document.querySelector("#sort").onclick = () => {
-    sortDesc = !sortDesc;
-    document.querySelector("#sort").textContent = sortDesc ? "모집인원↓" : "모집인원↑";
-    applyFilters();
-  };
-  document.querySelector("#csv").onclick = () => exportCSV(VIEW);
-  document.querySelector("#reset").onclick = () => {
-    document.querySelector("#kw").value = "";
-    document.querySelector("#vb").value = "";
-    document.querySelector("#ve").value = "";
-    document.querySelector("#minr").value = "";
-    document.querySelector("#region").value = "";
-    sortDesc = true;
-    document.querySelector("#sort").textContent = "모집인원↓";
-    applyFilters();
-  };
-
-  // 최초 한 번 전체 표시
-  applyFilters();
-})();
-</script>
+    // ---------- 시작 ----------
+    loadJson();
+  </script>
+</body>
 </html>

@@ -57,62 +57,124 @@
     </thead>
     <tbody></tbody>
   </table>
-  <script>
-    const z = (s) => s?.trim() || "";
-    const dstr = (s) =>
-      s && s.length === 8
-        ? `${s.slice(0, 4)}.${s.slice(4, 6)}.${s.slice(6)}`
-        : s;
-    const within = (v, from, to) =>
-      (!from || v >= from.replaceAll("-", "")) &&
-      (!to || v <= to.replaceAll("-", ""));
+<script>
+const z = s => s?.toString().trim() || "";
+const dstr = s => (typeof s === "string" && s.length===8) ? `${s.slice(0,4)}.${s.slice(4,6)}.${s.slice(6)}` : z(s);
 
-    (async function () {
-      const res = await fetch("data/1365.json");
-      const payload = await res.json();
-      const tb = document.querySelector("#tbl tbody");
-      const meta = document.querySelector("#meta");
-      const items = payload.items || [];
-      meta.textContent = `업데이트: ${new Date(
-        payload.updatedAt
-      ).toLocaleString()} · 총 ${items.length}건`;
+// YYYYMMDD 형식 체크
+const isYmd = v => typeof v === "string" && /^\d{8}$/.test(v);
+// 날짜 범위 비교 (값이 없거나 형식이 아니면 '필터 통과')
+function inRange(ymd, from, to){
+  if (!isYmd(ymd)) return true;
+  const f = from ? from.replaceAll("-","") : "";
+  const t = to   ? to.replaceAll("-","") : "";
+  return (!f || ymd >= f) && (!t || ymd <= t);
+}
 
-      function render() {
-        const kw = document.querySelector("#kw").value.toLowerCase();
-        const nb = document.querySelector("#nb").value;
-        const ne = document.querySelector("#ne").value;
+let sortDesc = true;       // 모집인원 내림차순 기본
+let currentRows = [];
 
-        const rows = items.filter((it) => {
-          const text =
-            `${it.progrmSj} ${it.mnnstNm} ${it.nanmmbyNm}`.toLowerCase();
-          return (!kw || text.includes(kw)) && within(it.noticeBgnde, nb, ne);
-        });
+function toInt(x){ const n = parseInt(String(x||"").replace(/,/g,""),10); return isNaN(n)?0:n; }
 
-        tb.innerHTML = rows
-          .map(
-            (it) => `
-      <tr>
-        <td>${z(it.progrmSj)}</td>
-        <td>${dstr(it.progrmBgnde)} ~ ${dstr(it.progrmEndde)}</td>
-        <td>${dstr(it.noticeBgnde)} ~ ${dstr(it.noticeEndde)}</td>
-        <td>${z(it.rcritNmpr)}</td>
-        <td>${z(it.mnnstNm)}</td>
-        <td>${z(it.nanmmbyNm)}</td>
-        <td>${z(it.progrmRegistNo)}</td>
-      </tr>`
-          )
-          .join("");
-      }
-      render();
-      document.querySelector("#kw").oninput = render;
-      document.querySelector("#nb").onchange = render;
-      document.querySelector("#ne").onchange = render;
-      document.querySelector("#reset").onclick = () => {
-        document.querySelector("#kw").value = "";
-        document.querySelector("#nb").value = "";
-        document.querySelector("#ne").value = "";
-        render();
-      };
-    })();
-  </script>
+function makeDetailUrl(id){
+  return `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?progrmRegistNo=${encodeURIComponent(id||"")}&type=show`;
+}
+
+function renderTable(items){
+  const tb = document.querySelector("#tbl tbody");
+  tb.innerHTML = items.map(it => `
+    <tr>
+      <td><a href="${makeDetailUrl(it.progrmRegistNo)}" target="_blank" rel="noopener">${z(it.progrmSj)}</a></td>
+      <td>${dstr(it.progrmBgnde)} ~ ${dstr(it.progrmEndde)}</td>
+      <td>${dstr(it.noticeBgnde)} ~ ${dstr(it.noticeEndde)}</td>
+      <td>${z(it.rcritNmpr)}</td>
+      <td>${z(it.mnnstNm)}</td>
+      <td>${z(it.nanmmbyNm)}</td>
+      <td>${z(it.progrmRegistNo)}</td>
+    </tr>`).join("");
+}
+
+function exportCSV(rows){
+  const header = ["봉사명","봉사기간","모집기간","모집인원","모집기관","등록기관","ID"];
+  const esc = v => `"${String(v??"").replace(/"/g,'""')}"`;
+  const lines = [header.map(esc).join(",")];
+  rows.forEach(it=>{
+    lines.push([
+      it.progrmSj,
+      `${dstr(it.progrmBgnde)} ~ ${dstr(it.progrmEndde)}`,
+      `${dstr(it.noticeBgnde)} ~ ${dstr(it.noticeEndde)}`,
+      it.rcritNmpr,
+      it.mnnstNm,
+      it.nanmmbyNm,
+      it.progrmRegistNo
+    ].map(esc).join(","));
+  });
+  const blob = new Blob([lines.join("\r\n")], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "1365_results.csv";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+(async function(){
+  const meta = document.querySelector("#meta");
+  let payload;
+  try {
+    const res = await fetch("data/1365.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("데이터 로드 실패");
+    payload = await res.json();
+  } catch (e) {
+    meta.textContent = "data/1365.json 이 아직 없습니다. Actions에서 Fetch 워크플로우를 먼저 실행하세요.";
+    return;
+  }
+
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  meta.textContent = `업데이트: ${payload.updatedAt ? new Date(payload.updatedAt).toLocaleString() : "—"} · 총 ${items.length}건`;
+
+  function apply(){
+    const kw = document.querySelector("#kw").value.toLowerCase();
+    const nb = document.querySelector("#nb").value;
+    const ne = document.querySelector("#ne").value;
+
+    let rows = items.filter(it => {
+      const text = `${it.progrmSj||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`.toLowerCase();
+      // 키워드 매칭 + (날짜가 없거나 올바르지 않으면 필터 통과)
+      return (!kw || text.includes(kw)) && inRange(it.noticeBgnde, nb, ne);
+    });
+
+    // 안전 정렬 (모집인원 비어있으면 0으로)
+    rows.sort((a,b) => (toInt(b.rcritNmpr) - toInt(a.rcritNmpr)) * (sortDesc ? 1 : -1));
+    currentRows = rows;
+    renderTable(rows);
+  }
+
+  document.querySelector("#kw").oninput = apply;
+  document.querySelector("#nb").onchange = apply;
+  document.querySelector("#ne").onchange = apply;
+  document.querySelector("#reset").onclick = () => {
+    document.querySelector("#kw").value = "";
+    document.querySelector("#nb").value = "";
+    document.querySelector("#ne").value = "";
+    sortDesc = true;
+    const btn = document.querySelector("#sort");
+    if (btn) btn.textContent = "모집인원↓";
+    apply();
+  };
+  const sortBtn = document.querySelector("#sort");
+  if (sortBtn){
+    sortBtn.onclick = () => {
+      sortDesc = !sortDesc;
+      sortBtn.textContent = sortDesc ? "모집인원↓" : "모집인원↑";
+      apply();
+    };
+  }
+  const csvBtn = document.querySelector("#csv");
+  if (csvBtn){
+    csvBtn.onclick = () => exportCSV(currentRows);
+  }
+
+  apply();
+})();
+</script>
 </html>
+

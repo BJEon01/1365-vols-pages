@@ -6,7 +6,6 @@
   <title>1365 선별 · 서울(모집중)</title>
   <style>
     :root {
-      --maxw: 1100px;
       --fg: #111;
       --muted: #666;
       --line: #e5e7eb;
@@ -15,12 +14,16 @@
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
-      color: var(--fg); background: var(--bg);
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
+      color: var(--fg);
+      background: var(--bg);
     }
-    .wrap { max-width: var(--maxw); margin: 32px auto; padding: 0 16px; }
+    /* 전체 너비 사용 */
+    .wrap { width: 100%; margin: 24px 0; padding: 0 16px; }
     h1 { font-size: 22px; margin: 0 0 8px; }
     .meta { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+
     .panel {
       border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafafa;
       margin-bottom: 16px;
@@ -45,13 +48,13 @@
     thead th {
       position: sticky; top: 0; background: #f6f7fb; z-index: 1;
       border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 13px; white-space: nowrap;
-      text-align: center;
+      text-align: center; /* 열 가운데 정렬 */
     }
     tbody td {
-      border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 14px; text-align: center;
+      border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 14px; text-align: center; /* 열 가운데 정렬 */
       vertical-align: middle;
     }
-    td.title { text-align: left; }
+    td.title { text-align: left; } /* 제목만 좌측 정렬 */
     a.title-link { color: #0b57d0; text-decoration: none; }
     a.title-link:hover { text-decoration: underline; }
 
@@ -119,7 +122,7 @@
             <th style="width:140px;">봉사시간</th>
             <th style="width:140px;">모집기한(종료)</th>
             <th style="width:110px;">모집인원</th>
-            <!-- 모집기관 열 삭제 -->
+            <!-- 모집기관 열 제거 -->
             <th style="width:180px;">등록기관</th>
             <th style="width:200px;">봉사지역/장소</th>
           </tr>
@@ -217,7 +220,7 @@
 
       let out = ALL;
 
-      // 키워드(제목/기관/장소) : 제목 + 모집기관 + 등록기관 + 장소
+      // 키워드(제목/기관/장소)
       if (q) {
         const qq = q.toLowerCase();
         out = out.filter(it => {
@@ -226,7 +229,7 @@
         });
       }
 
-      // 봉사지역(키워드) : 장소 + 등록기관에 대해 추가 키워드
+      // 봉사지역(키워드) : 장소 + 등록기관
       if (rq) {
         const rr = rq.toLowerCase();
         out = out.filter(it => {
@@ -255,7 +258,6 @@
 
           const s = from8 || "00000000";
           const e = to8v  || "99999999";
-          // [bg,ed] 와 [s,e]가 겹치면 true
           return (ed >= s) && (bg <= e);
         });
       }

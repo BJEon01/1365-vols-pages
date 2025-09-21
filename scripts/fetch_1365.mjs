@@ -23,7 +23,7 @@ const PROGRM_STTUS_SE = (process.env.PROGRM_STTUS_SE || "").trim(); // 2=모집�
 const RECRUITING_ONLY = (process.env.RECRUITING_ONLY ?? "true") === "true"; // true면 '오늘이 모집기간'인 것만 로컬 필터
 
 const PER        = Number(process.env.PER || 100);
-const MAX_PAGES  = Number(process.env.MAX_PAGES || 50);
+const MAX_PAGES  = Number(process.env.MAX_PAGES || 50); // 100*50=5000
 const KEYWORD    = (process.env.KEYWORD || "").trim();
 
 const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
@@ -32,7 +32,6 @@ const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
 // ====== CONSTS ======
 const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
-// 목록 엔드포인트 (기관에서 공개한 표준 엔드포인트 계열; 환경에 따라 다를 수 있으나 이전 성공 케이스 유지)
 const EP   = `${BASE}/getVltrSearchWordList`;
 
 const today = new Date();
@@ -198,9 +197,17 @@ while (true) {
       noticeBgnde:    it.noticeBgnde ?? "",
       noticeEndde:    it.noticeEndde ?? "",
       rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
+
+      // 기관/장소
       mnnstNm:        it.mnnstNm ?? "",
       nanmmbyNm:      it.nanmmbyNm ?? "",
-      actPlace:       it.actPlace ?? ""
+      actPlace:       it.actPlace ?? "",
+
+      // 봉사시간 (API에 있으면 사용)
+      actBeginTm:     (it.actBeginTm ?? "").toString().trim(),
+      actEndTm:       (it.actEndTm ?? "").toString().trim(),
+      actBeginMnt:    (it.actBeginMnt ?? "").toString().trim(),
+      actEndMnt:      (it.actEndMnt ?? "").toString().trim(),
     };
     if (base.rcritNmpr) filledApi++;
     all.push(base);
@@ -227,6 +234,9 @@ await Promise.all(needs.map(it => limit(async () => {
   // 캐시 업데이트
   cache[it.progrmRegistNo] = { value: it.rcritNmpr || "", fetchedAt: new Date().toISOString() };
 })));
+
+// ====== 저장 전 정렬: 모집기간 종료일 오름차순 ======
+all.sort((a, b) => (a.noticeEndde || "99999999").localeCompare(b.noticeEndde || "99999999"));
 
 // ====== 저장 ======
 fs.mkdirSync("docs/data", { recursive: true });

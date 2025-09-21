@@ -1,9 +1,9 @@
-name: Fetch 1365 data
+name: Fetch 1365 data (fast)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 0 * * *" # 매일 09:15 KST(=00:15 UTC)쯤
+    - cron: "15 0 * * *"   # 매일 09:15 KST
 
 jobs:
   build:
@@ -14,18 +14,40 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
+
+      # 의존성은 가볍게 유지 (cheerio 필요 없음)
       - run: npm i axios xml2js
-      - name: Run fetch
+
+      - name: Run fetch (Seoul / recruiting / today~+30)
         env:
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
-          # NOTICE_BG: "20250101"   # 필요시 고정
-          # NOTICE_ED: "20251231"
-          # KEYWORD:   "환경"       # 선택
+
+          # 모집기간 = 오늘 ~ 오늘+30
+          OFFSET_BG: "0"
+          OFFSET_ED: "30"
+
+          # 지역(서울) + 상태(모집중)
+          SIDO_NAME:  "서울특별시"   # (선택) 텍스트 보정 필터
+          SIDO_CODE:  "6110000"     # 서울 시도코드
+          GUGUN_CODE: ""            # 전체
+          PROGRM_STTUS_SE: "2"      # 1:모집완료, 2:모집중(문서 기준)
+
+          # 페이지/키워드
+          PER: "100"
+          MAX_PAGES: "50"
+          KEYWORD: ""
+
+          # 상세 파싱 성능옵션
+          DETAIL_CONCURRENCY: "16"  # 8~24 권장
+          DETAIL_DELAY_MS: "0"
+          MAX_DETAIL: "999999"      # 최초 1회 크게
+
         run: node scripts/fetch_1365.mjs
+
       - name: Commit & push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/data/1365.json
-          git commit -m "chore(data): refresh 1365.json" || echo "no changes"
+          git add docs/data/1365.json docs/data/recruit_cache.json
+          git commit -m "chore(data): refresh 1365.json (fast)" || echo "no changes"
           git push

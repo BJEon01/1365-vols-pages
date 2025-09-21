@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2025-09-21T15:17:59.272Z",
+  "updatedAt": "2025-09-21T19:14:53.335Z",
   "params": {
     "USE_NOTICE_RANGE": false,
     "NOTICE_BG": "20250921",
@@ -22,10 +22,10 @@
   },
   "stat": {
     "filledApi": 0,
-    "filledDetail": 1,
+    "filledDetail": 0,
     "stillEmpty": 20,
     "total": 1984,
-    "triedDetail": 21
+    "triedDetail": 20
   },
   "count": 1984,
   "items": [

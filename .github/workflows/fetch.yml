@@ -23,21 +23,23 @@ jobs:
 
       - name: Run fetch
         env:
+  # API 키
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
-
-          # ====== 모집기간 조건(현재 설정) ======
-          # 넓게 수집: 오늘-30 ~ 오늘+60, '모집중' 고정 안함, 로컬 보정(오늘 포함) 안함
-          OFFSET_BG: "-30"
-          OFFSET_ED: "60"
-          PROGRM_STTUS_SE: ""
-          RECRUITING_ONLY: "false"
-
-          # 지역/키워드(필요시 조정)
-          SIDO_CODE: "6110000"   # 서울 (비우면 전국)
+        
+          # 서울특별시로 한정
+          SIDO_CODE: "6110000"
           GUGUN_CODE: ""
-          KEYWORD: ""
-
-          # 최대 5,000건까지
+        
+          # 모집중만
+          PROGRM_STTUS_SE: "2"
+        
+          # 공지/모집기간(range) 파라미터 아예 제거
+          USE_NOTICE_RANGE: "false"
+        
+          # (선택) 로컬에서 '오늘이 notice 기간 포함' 필터는 끄기
+          RECRUITING_ONLY: "false"
+        
+          # 페이징
           PER: "100"
           MAX_PAGES: "50"
 

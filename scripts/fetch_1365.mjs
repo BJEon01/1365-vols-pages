@@ -1,5 +1,6 @@
-// Node 18+
-// 빠른 최초 수집을 위해 DOM 파서 없이 정규식/슬라이싱만 사용합니다.
+// Node 18+ / ESM (.mjs)
+// 목록 API + (필요시) 상세페이지를 긁어 "모집인원" 보강
+// 빠른 최초 수집을 위해 DOM 파서 없이 정규식/슬라이싱만 사용
 
 import fs from "fs";
 import http from "http";
@@ -11,15 +12,15 @@ import { parseStringPromise } from "xml2js";
 const SERVICE_KEY = process.env.SERVICE_KEY?.trim();
 if (!SERVICE_KEY) throw new Error("SERVICE_KEY missing");
 
-const OFFSET_BG   = Number(process.env.OFFSET_BG ?? 0);    // 오늘 + offset
+const OFFSET_BG   = Number(process.env.OFFSET_BG ?? 0);   // 오늘 + offset
 const OFFSET_ED   = Number(process.env.OFFSET_ED ?? 30);
 
-const SIDO_NAME   = (process.env.SIDO_NAME || "").trim();  // 선택 보정
-const SIDO_CODE   = (process.env.SIDO_CODE || "").trim();  // 6110000 (서울)
-const GUGUN_CODE  = (process.env.GUGUN_CODE || "").trim(); // 시군구 코드 (미지정 = 전체)
+const SIDO_NAME   = (process.env.SIDO_NAME || "").trim();   // 서울 같은 텍스트 보정(선택)
+const SIDO_CODE   = (process.env.SIDO_CODE || "").trim();   // 6110000 (서울)
+const GUGUN_CODE  = (process.env.GUGUN_CODE || "").trim();  // 시군구 코드 (미지정 = 전체)
 
 const PROGRM_STTUS_SE = (process.env.PROGRM_STTUS_SE || "").trim(); // 2=모집중
-const RECRUITING_ONLY = true; // 모집기간(오늘 포함)인지 로컬 보정
+const RECRUITING_ONLY = (process.env.RECRUITING_ONLY ?? "true") === "true"; // true면 '오늘이 모집기간'인 것만 로컬 필터
 
 const PER        = Number(process.env.PER || 100);
 const MAX_PAGES  = Number(process.env.MAX_PAGES || 50);
@@ -31,6 +32,7 @@ const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
 // ====== CONSTS ======
 const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
+// 목록 엔드포인트 (기관에서 공개한 표준 엔드포인트 계열; 환경에 따라 다를 수 있으나 이전 성공 케이스 유지)
 const EP   = `${BASE}/getVltrSearchWordList`;
 
 const today = new Date();
@@ -40,7 +42,7 @@ const addDays = (dt, n) => { const t = new Date(dt); t.setDate(t.getDate()+n); r
 const NOTICE_BG = ymd(addDays(today, OFFSET_BG));
 const NOTICE_ED = ymd(addDays(today, OFFSET_ED));
 
-// ====== HTTP: Keep-Alive & 공통 인스턴스 ======
+// ====== HTTP: Keep-Alive ======
 const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 128 });
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128 });
 const AX = axios.create({
@@ -55,11 +57,11 @@ const toArray = x => (x ? (Array.isArray(x) ? x : [x]) : []);
 const isYmd = v => typeof v === "string" && /^\d{8}$/.test(v);
 const between = (v, a, b) => (isYmd(v) ? (!a || v >= a) && (!b || v <= b) : false);
 
-// 빠른 "모집인원" 추출 (DOM 파서 없음)
+// 상세 HTML에서 '모집인원' 빠르게 추출
 function extractRecruit(html) {
   const s = String(html);
 
-  // 1) '<dt>모집인원</dt>' 라벨 기준으로 바로 다음 <dd>만 읽기
+  // 1) '<dt>모집인원</dt>' 기준 바로 다음 <dd> 텍스트
   let pos = s.indexOf(">모집인원<");
   if (pos === -1) pos = s.search(/<dt[^>]*>\s*모집\s*인원\s*<\/dt>/i);
   if (pos !== -1) {
@@ -75,21 +77,20 @@ function extractRecruit(html) {
     }
   }
 
-  // 2) th/td 테이블 형태
+  // 2) th/td 형태 대비
   let m = s.match(/<th[^>]*>\s*모집\s*인원[\s\S]{0,100}?<td[^>]*>([\s\S]{0,80}?)<\/td>/i);
   if (m) {
     const n = m[1].replace(/<[^>]+>/g, " ").match(/([0-9][0-9,]*)\s*명/i);
     if (n) return n[1].replace(/,/g, "");
   }
 
-  // 3) 라벨 근처 500자 스캔 (마지막 보루)
+  // 3) 라벨 근처 500자 스캔 (보루)
   const i = s.search(/모집\s*인원/i);
   if (i >= 0) {
     const w = s.slice(i, i + 500).replace(/<[^>]+>/g, " ");
     const n = w.match(/([0-9][0-9,]*)\s*명/i);
     if (n) return n[1].replace(/,/g, "");
   }
-
   return "";
 }
 
@@ -148,6 +149,8 @@ let cache = {};
 try { cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8")); } catch { cache = {}; }
 
 // ====== 수집 ======
+console.log("▶ params", { NOTICE_BG, NOTICE_ED, SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE, RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES });
+
 let page = 1;
 const all = [];
 let filledApi = 0, filledDetail = 0, stillEmpty = 0, triedDetail = 0;
@@ -172,6 +175,8 @@ while (true) {
   const body  = await parseBody(data, headers);
   const items = toArray(body?.items?.item);
   const total = Number(body?.totalCount || 0);
+
+  console.log(`page=${page} total=${total} pageItems=${items.length}`);
 
   for (const it of items) {
     // (선택) 서울 텍스트 보정

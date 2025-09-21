@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>1365 모집인원 정리</title>
+  <style>
+    body {
+      font: 14px/1.4 system-ui, apple sd gothic neo, malgun gothic, sans-serif;
+      margin: 24px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th,
+    td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #fafafa;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    input {
+      padding: 6px 8px;
+    }
+  </style>
+  <h1>1365 모집인원 정리 (github.io)</h1>
+  <div class="row">
+    <label
+      >키워드: <input id="kw" placeholder="봉사명/기관명 포함 검색"
+    /></label>
+    <label>모집 시작 ≥ <input id="nb" type="date" /></label>
+    <label>모집 종료 ≤ <input id="ne" type="date" /></label>
+    <button id="reset">초기화</button>
+  </div>
+  <div id="meta"></div>
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th>봉사명</th>
+        <th>봉사기간</th>
+        <th>모집기간</th>
+        <th>모집인원</th>
+        <th>모집기관</th>
+        <th>등록기관</th>
+        <th>ID</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <script>
+    const z = (s) => s?.trim() || "";
+    const dstr = (s) =>
+      s && s.length === 8
+        ? `${s.slice(0, 4)}.${s.slice(4, 6)}.${s.slice(6)}`
+        : s;
+    const within = (v, from, to) =>
+      (!from || v >= from.replaceAll("-", "")) &&
+      (!to || v <= to.replaceAll("-", ""));
+
+    (async function () {
+      const res = await fetch("data/1365.json");
+      const payload = await res.json();
+      const tb = document.querySelector("#tbl tbody");
+      const meta = document.querySelector("#meta");
+      const items = payload.items || [];
+      meta.textContent = `업데이트: ${new Date(
+        payload.updatedAt
+      ).toLocaleString()} · 총 ${items.length}건`;
+
+      function render() {
+        const kw = document.querySelector("#kw").value.toLowerCase();
+        const nb = document.querySelector("#nb").value;
+        const ne = document.querySelector("#ne").value;
+
+        const rows = items.filter((it) => {
+          const text =
+            `${it.progrmSj} ${it.mnnstNm} ${it.nanmmbyNm}`.toLowerCase();
+          return (!kw || text.includes(kw)) && within(it.noticeBgnde, nb, ne);
+        });
+
+        tb.innerHTML = rows
+          .map(
+            (it) => `
+      <tr>
+        <td>${z(it.progrmSj)}</td>
+        <td>${dstr(it.progrmBgnde)} ~ ${dstr(it.progrmEndde)}</td>
+        <td>${dstr(it.noticeBgnde)} ~ ${dstr(it.noticeEndde)}</td>
+        <td>${z(it.rcritNmpr)}</td>
+        <td>${z(it.mnnstNm)}</td>
+        <td>${z(it.nanmmbyNm)}</td>
+        <td>${z(it.progrmRegistNo)}</td>
+      </tr>`
+          )
+          .join("");
+      }
+      render();
+      document.querySelector("#kw").oninput = render;
+      document.querySelector("#nb").onchange = render;
+      document.querySelector("#ne").onchange = render;
+      document.querySelector("#reset").onclick = () => {
+        document.querySelector("#kw").value = "";
+        document.querySelector("#nb").value = "";
+        document.querySelector("#ne").value = "";
+        render();
+      };
+    })();
+  </script>
+</html>

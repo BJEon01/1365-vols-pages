@@ -56,6 +56,17 @@ const toArray = x => (x ? (Array.isArray(x) ? x : [x]) : []);
 const isYmd = v => typeof v === "string" && /^\d{8}$/.test(v);
 const between = (v, a, b) => (isYmd(v) ? (!a || v >= a) && (!b || v <= b) : false);
 
+// 값 표준화 헬퍼
+const S  = v => (v == null ? "" : String(v));              // 항상 문자열
+const D8 = v => {                                          // YYYYMMDD로 정규화
+  const s = S(v).replace(/\D/g, "");
+  return s.length >= 8 ? s.slice(0,8) : s;
+};
+const P2 = v => {                                          // 시/분 2자리 패딩
+  const s = S(v).replace(/\D/g, "");
+  return s ? s.padStart(2, "0").slice(-2) : "";
+};
+
 // 상세 HTML에서 '모집인원' 빠르게 추출
 function extractRecruit(html) {
   const s = String(html);
@@ -185,29 +196,35 @@ while (true) {
     }
     // (로컬 보정) 모집기간에 오늘 포함
     if (RECRUITING_ONLY) {
-      const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
+      const nb = S(it.noticeBgnde);
+      const ne = S(it.noticeEndde);
       if (!(isYmd(nb) && isYmd(ne) && between(ymd(today), nb, ne))) continue;
     }
 
+    // 표준화된 base
     const base = {
-      progrmRegistNo: it.progrmRegistNo ?? "",
-      progrmSj:       it.progrmSj ?? "",
-      progrmBgnde:    it.progrmBgnde ?? "",
-      progrmEndde:    it.progrmEndde ?? "",
-      noticeBgnde:    it.noticeBgnde ?? "",
-      noticeEndde:    it.noticeEndde ?? "",
-      rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
+      progrmRegistNo: S(it.progrmRegistNo),
+      progrmSj:       S(it.progrmSj),
+
+      // 날짜는 항상 "YYYYMMDD"
+      progrmBgnde:    D8(it.progrmBgnde),
+      progrmEndde:    D8(it.progrmEndde),
+      noticeBgnde:    D8(it.noticeBgnde),
+      noticeEndde:    D8(it.noticeEndde),
+
+      // 숫자여도 문자열로 고정
+      rcritNmpr:      S(it.rcritNmpr).trim(),
 
       // 기관/장소
-      mnnstNm:        it.mnnstNm ?? "",
-      nanmmbyNm:      it.nanmmbyNm ?? "",
-      actPlace:       it.actPlace ?? "",
+      mnnstNm:        S(it.mnnstNm),
+      nanmmbyNm:      S(it.nanmmbyNm),
+      actPlace:       S(it.actPlace),
 
-      // 봉사시간 (API에 있으면 사용)
-      actBeginTm:     (it.actBeginTm ?? "").toString().trim(),
-      actEndTm:       (it.actEndTm ?? "").toString().trim(),
-      actBeginMnt:    (it.actBeginMnt ?? "").toString().trim(),
-      actEndMnt:      (it.actEndMnt ?? "").toString().trim(),
+      // 봉사시간 (API에 있으면 사용) → "HH" / "mm" 2자리 보장
+      actBeginTm:     P2(it.actBeginTm),
+      actBeginMnt:    P2(it.actBeginMnt),
+      actEndTm:       P2(it.actEndTm),
+      actEndMnt:      P2(it.actEndMnt),
     };
     if (base.rcritNmpr) filledApi++;
     all.push(base);
@@ -236,7 +253,11 @@ await Promise.all(needs.map(it => limit(async () => {
 })));
 
 // ====== 저장 전 정렬: 모집기간 종료일 오름차순 ======
-all.sort((a, b) => (a.noticeEndde || "99999999").localeCompare(b.noticeEndde || "99999999"));
+const sortKey = (v) => {
+  const s = D8(v);
+  return s && s.length === 8 ? s : "99999999";
+};
+all.sort((a, b) => sortKey(a.noticeEndde).localeCompare(sortKey(b.noticeEndde)));
 
 // ====== 저장 ======
 fs.mkdirSync("docs/data", { recursive: true });

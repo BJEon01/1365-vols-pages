@@ -158,11 +158,13 @@
     function setMeta() {
       const m = document.getElementById("meta");
       const when = META.updatedAt ? new Date(META.updatedAt).toLocaleString() : "-";
-      m.textContent = `업데이트: ${when} · 원본 ${META.count}건 (정렬: 모집기한 종료일 ↑)`;
+      m.textContent = `최근 업데이트: ${when} ( 00:00시 기준 4시간마다 갱신 )`;
     }
 
     function setCount(n) {
-      document.getElementById("count").textContent = `표시: ${n}건`;
+      const total = META.count || 0;
+      document.getElementById("count").textContent =
+        `표시: ${n} / ${total}건 (정렬: 모집기한 종료일 ↑)`;
     }
 
     function linkFor(it) {
@@ -311,4 +313,5 @@
   </script>
 </body>
 </html>
+
 

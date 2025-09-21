@@ -30,6 +30,7 @@
     .chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
     .chip{border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:12px;background:#fff}
     .foot{margin:14px 0 0;font-size:12px;color:var(--muted)}
+    @media (max-width:900px){ .hide-md{display:none} }
     @media (max-width:760px){ .hide-sm{display:none} }
   </style>
 </head>
@@ -55,17 +56,18 @@
         <label>봉사기간 (종료)</label>
         <input type="date" id="f-to" />
       </div>
+      <!-- (Q7) 지역 먼저 -->
       <div>
-        <label>키워드 (제목/기관/장소)</label>
-        <input type="text" id="f-keyword" placeholder="예: 환경, 청소년, 독거…" />
+        <label>봉사지역 (키워드)</label>
+        <input type="text" id="f-region" placeholder="예: 강남, 은평, 서울…" />
       </div>
       <div>
         <label>모집인원 (이상)</label>
         <input type="number" id="f-min" placeholder="0" min="0" step="1" />
       </div>
       <div>
-        <label>봉사지역 (키워드)</label>
-        <input type="text" id="f-region" placeholder="예: 강남, 은평, 서울…" />
+        <label>키워드 (제목/기관/장소)</label>
+        <input type="text" id="f-keyword" placeholder="예: 환경, 청소년, 독거…" />
       </div>
       <div class="btns">
         <button class="primary" id="btn-search">검색</button>
@@ -80,8 +82,9 @@
         <tr>
           <th class="nowrap">프로그램번호</th>
           <th>제목</th>
-          <th class="nowrap hide-sm">모집기간</th>
+          <th class="nowrap">모집기한(종료)</th>
           <th class="nowrap">봉사기간</th>
+          <th class="nowrap hide-md">봉사시간</th>
           <th class="num">모집인원</th>
           <th class="hide-sm">모집기관</th>
           <th class="hide-sm">등록기관</th>
@@ -89,7 +92,7 @@
         </tr>
       </thead>
       <tbody id="table-body">
-        <tr><td colspan="8" class="muted" style="text-align:center">로딩 중…</td></tr>
+        <tr><td colspan="9" class="muted" style="text-align:center">로딩 중…</td></tr>
       </tbody>
     </table>
 
@@ -108,6 +111,12 @@
       return true;
     };
     const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const pad2 = n => String(n??"").padStart(2,"0");
+    const fmtTime = (h, m) => {
+      if (!h && !m) return "";
+      const HH = pad2(h||0), MM = pad2(m||0);
+      return `${HH}:${MM}`;
+    };
 
     let ALL = [];
 
@@ -124,6 +133,8 @@
         document.getElementById('last-updated').textContent = data?.updatedAt || '';
         document.getElementById('total-count').textContent = data?.count ?? 0;
         ALL = Array.isArray(data?.items) ? data.items : [];
+
+        // 초기표시는 종료일 오름차순
         render(ALL);
       } catch (e) {
         console.error('JSON 로드 실패', e);
@@ -131,7 +142,7 @@
         box.style.display = 'block';
         box.textContent = '데이터를 불러오지 못했습니다: ' + (e.message || e);
         document.getElementById('table-body').innerHTML =
-          `<tr><td colspan="8" class="muted" style="text-align:center">데이터 로드 실패</td></tr>`;
+          `<tr><td colspan="9" class="muted" style="text-align:center">데이터 로드 실패</td></tr>`;
       }
     }
 
@@ -155,6 +166,7 @@
         const rn = Number(r.rcritNmpr || 0);
 
         const okKw = !f.kw || (sj.includes(f.kw) || org1.includes(f.kw) || org2.includes(f.kw) || place.includes(f.kw));
+        // (Q2) 봉사지역은 장소/기관명들에서 부분일치
         const okRegion = !f.region || (place.includes(f.region) || org1.includes(f.region) || org2.includes(f.region));
         const okMin = rn >= f.min;
         const okPeriod = overlap(nb, ne, f.from, f.to);
@@ -163,32 +175,47 @@
       });
     }
 
+    function sortByEndDateAsc(rows) {
+      return [...rows].sort((a,b) =>
+        (a.noticeEndde || '99999999').localeCompare(b.noticeEndde || '99999999')
+      );
+    }
+
     function render(rows) {
-      document.getElementById('shown-count').textContent = rows.length;
+      // 정렬: 모집기간 종료일 오름차순 (가까운 마감 먼저)
+      const sorted = sortByEndDateAsc(rows);
+
+      document.getElementById('shown-count').textContent = sorted.length;
 
       const f = getFilters();
       document.getElementById('chips').innerHTML = [
         (f.from || f.to) ? `<span class="chip">기간: ${f.from||'~'} ~ ${f.to||'~'}</span>` : '',
-        f.kw ? `<span class="chip">키워드: ${esc(f.kw)}</span>` : '',
-        f.min ? `<span class="chip">모집인원≥ ${f.min}</span>` : '',
         f.region ? `<span class="chip">지역: ${esc(f.region)}</span>` : '',
+        f.min ? `<span class="chip">모집인원≥ ${f.min}</span>` : '',
+        f.kw ? `<span class="chip">키워드: ${esc(f.kw)}</span>` : '',
       ].filter(Boolean).join('');
 
       const tbody = document.getElementById('table-body');
-      if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center">표시할 데이터가 없습니다.</td></tr>`;
+      if (!sorted.length) {
+        tbody.innerHTML = `<tr><td colspan="9" class="muted" style="text-align:center">표시할 데이터가 없습니다.</td></tr>`;
         return;
       }
 
-      tbody.innerHTML = rows.map(r => {
+      tbody.innerHTML = sorted.map(r => {
         const pid = r.progrmRegistNo;
         const link = `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(pid)}`;
+
+        const begin = fmtTime(r.actBeginTm, r.actBeginMnt);
+        const end   = fmtTime(r.actEndTm, r.actEndMnt);
+        const time  = (begin || end) ? `${begin} ~ ${end}` : "";
+
         return `
           <tr>
             <td class="nowrap">${pid}</td>
             <td><a class="link" href="${link}" target="_blank" rel="noopener">${esc(r.progrmSj || '')}</a></td>
-            <td class="nowrap hide-sm">${fmtDate(r.noticeBgnde)} ~ ${fmtDate(r.noticeEndde)}</td>
+            <td class="nowrap">${fmtDate(r.noticeEndde)}</td>
             <td class="nowrap">${fmtDate(r.progrmBgnde)} ~ ${fmtDate(r.progrmEndde)}</td>
+            <td class="nowrap hide-md">${esc(time)}</td>
             <td class="num">${Number(r.rcritNmpr || 0)}</td>
             <td class="hide-sm">${esc(r.mnnstNm || '')}</td>
             <td class="hide-sm">${esc(r.nanmmbyNm || '')}</td>
@@ -210,6 +237,9 @@
       render(ALL);
     });
     document.getElementById('f-keyword').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); render(applyFilter(ALL, getFilters())); }
+    });
+    document.getElementById('f-region').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); render(applyFilter(ALL, getFilters())); }
     });
 

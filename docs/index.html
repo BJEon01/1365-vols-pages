@@ -1,293 +1,313 @@
 <!doctype html>
 <html lang="ko">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>1365 선별 · 서울(모집중)</title>
-<style>
-  :root{
-    --maxw: 1280px;
-  }
-  body{font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Apple SD Gothic Neo, "Noto Sans KR", Malgun Gothic, sans-serif; color:#111;}
-  .wrap{max-width:var(--maxw); margin:24px auto; padding:0 16px;}
-  h1{font-size:22px; margin:0 0 8px;}
-  .meta{color:#666; margin:4px 0 16px; font-size:12px}
-  .row{display:grid; gap:10px; margin:10px 0 8px;}
-  @media (min-width: 960px){
-    .row{grid-template-columns: 1fr 1fr 1fr 1fr;}
-  }
-  .fld{display:flex; gap:8px; align-items:center}
-  .fld>label{white-space:nowrap; color:#555; font-size:13px;}
-  input[type="text"], input[type="number"], input[type="date"]{
-    width:100%; padding:10px 12px; border:1px solid #d4d6da; border-radius:8px; background:#fff;
-  }
-  input[type="number"]{text-align:right;}
-  .actions{display:flex; gap:8px; margin:6px 0 12px;}
-  .btn{
-    border:1px solid #d4d6da; background:#fff; border-radius:8px; padding:10px 16px; cursor:pointer;
-  }
-  .btn.primary{background:#1f6fff; color:#fff; border-color:#1f6fff;}
-  .note{font-size:12px; color:#777; display:flex; align-items:center; gap:6px; margin:2px 0 14px;}
-  .note .dot{width:6px; height:6px; background:#bbb; border-radius:50%;}
-  .right{float:right;}
-  .muted{color:#888}
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>1365 선별 · 서울(모집중)</title>
+  <style>
+    :root {
+      --fg: #111;
+      --muted: #666;
+      --line: #e5e7eb;
+      --bg: #fff;
+      --accent: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+    }
+    /* 전체 너비 사용 */
+    .wrap { width: 100%; margin: 24px 0; padding: 0 16px; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    .meta { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
 
-  /* 테이블 */
-  table{width:100%; border-collapse:collapse; table-layout:fixed; background:#fff;}
-  thead th{
-    background:#f6f7fb; border-top:1px solid #e6e8ee; border-bottom:1px solid #e6e8ee;
-    padding:12px 10px; font-weight:600;
-    text-align:center; vertical-align:middle;
-  }
-  tbody td{
-    border-bottom:1px solid #f0f1f4; padding:12px 10px; text-align:center; vertical-align:middle;
-  }
-  tbody tr:hover{background:#fafbff;}
-  /* 제목은 좌측 정렬 */
-  .col-title{ text-align:left !important; }
+    .panel {
+      border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafafa;
+      margin-bottom: 16px;
+    }
+    .row { display: grid; gap: 10px; }
+    @media (min-width: 720px) {
+      .row { grid-template-columns: repeat(6, minmax(0,1fr)); align-items: end; }
+    }
+    label { font-size: 12px; color: var(--muted); display: block; margin: 4px 0; }
+    input[type="text"], input[type="date"], input[type="number"], select {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+      font-size: 14px;
+    }
+    .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+    button {
+      border: 1px solid var(--line); padding: 8px 12px; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px;
+    }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .count { font-size: 13px; color: var(--muted); margin: 6px 0 10px; }
 
-  /* 열 폭 조정 (제목 ↓, 봉사기간 ↑, 줄바꿈 방지) */
-  .results-table th:nth-child(2), .results-table td:nth-child(2){ width:36%; }
-  .results-table th:nth-child(3), .results-table td:nth-child(3){ width:20%; white-space:nowrap; }
-  .results-table th:nth-child(4), .results-table td:nth-child(4){ white-space:nowrap; }
-  .results-table th:nth-child(5), .results-table td:nth-child(5){ white-space:nowrap; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      position: sticky; top: 0; background: #f6f7fb; z-index: 1;
+      border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 13px; white-space: nowrap;
+      text-align: center; /* 열 가운데 정렬 */
+    }
+    tbody td {
+      border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 14px; text-align: center; /* 열 가운데 정렬 */
+      vertical-align: middle;
+    }
+    td.title { text-align: left; } /* 제목만 좌측 정렬 */
+    a.title-link { color: #0b57d0; text-decoration: none; }
+    a.title-link:hover { text-decoration: underline; }
 
-  .empty{padding:28px 8px; text-align:center; color:#888;}
-  a.title{color:#0a58ca; text-decoration:none;}
-  a.title:hover{text-decoration:underline;}
-  .count{margin:12px 0 8px;}
-  .badge{display:inline-block; padding:2px 6px; border-radius:6px; background:#eef4ff; color:#1f6fff; font-size:12px; margin-left:6px;}
-</style>
+    .empty, .error {
+      border: 1px dashed var(--line); background: #fff; color: var(--muted);
+      border-radius: 10px; padding: 16px; text-align: center; margin-top: 10px;
+    }
+    .error { color: #b91c1c; border-color: #fecaca; background: #fff7f7; }
+    .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+    /* ✅ 봉사기간(3번째 열) 줄바꿈 방지만 추가 */
+    #tbl th:nth-child(3),
+    #tbl td:nth-child(3) { white-space: nowrap; }
+  </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>1365 선별 · 서울(모집중)</h1>
-  <div class="meta">
-    <span id="meta-updated">업데이트: -</span>
-    · <span id="meta-count">총: -</span>
-    · <span class="muted">원본 5000건 <span id="meta-filter">(정렬: 모집기한 종료일 ↑)</span></span>
+  <div class="wrap">
+    <h1>1365 선별 · 서울(모집중)</h1>
+    <div class="meta" id="meta">로딩 중…</div>
+
+    <!-- 필터 패널 -->
+    <div class="panel">
+      <div class="row">
+        <div style="grid-column: span 2;">
+          <label for="q">키워드 (제목/기관/장소)</label>
+          <input id="q" type="text" placeholder="예: 환경, 은평구청, 재택봉사 등" />
+        </div>
+        <div style="grid-column: span 2;">
+          <label for="rq">봉사지역 (키워드)</label>
+          <input id="rq" type="text" placeholder="예: 강남구, 은평구, 서울 등" />
+        </div>
+        <div>
+          <label for="minRecruit">모집인원 (이상)</label>
+          <input id="minRecruit" type="number" min="0" step="1" placeholder="예: 10" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="actions" style="justify-content:flex-start;">
+            <button id="searchBtn" class="primary">검색</button>
+            <button id="resetBtn">초기화</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label for="from">봉사기간 (시작)</label>
+          <input id="from" type="date" />
+        </div>
+        <div>
+          <label for="to">봉사기간 (끝)</label>
+          <input id="to" type="date" />
+        </div>
+        <div class="note" style="grid-column: span 4;">
+          ※ 봉사기간 필터는 활동기간이 지정 범위와 <b>겹치는</b> 공고만 남깁니다.
+        </div>
+      </div>
+    </div>
+
+    <div class="count" id="count"></div>
+
+    <div class="table-wrap">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th style="width:64px;">번호</th>
+            <th>제목</th>
+            <th style="width:170px;">봉사기간</th>
+            <th style="width:140px;">봉사시간</th>
+            <th style="width:140px;">모집기한(종료)</th>
+            <th style="width:110px;">모집인원</th>
+            <!-- 모집기관 열 제거 -->
+            <th style="width:180px;">등록기관</th>
+            <th style="width:200px;">봉사지역/장소</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="empty" class="empty" style="display:none;">조건에 맞는 결과가 없습니다.</div>
+      <div id="error" class="error" style="display:none;">데이터를 불러오지 못했습니다.</div>
+    </div>
   </div>
 
-  <!-- 검색 폼 -->
-  <div class="row">
-    <div class="fld">
-      <label for="qRegion">봉사지역 (키워드)</label>
-      <input id="qRegion" type="text" placeholder="예: 강남구, 은평구, 서울 등" />
-    </div>
-    <div class="fld">
-      <label for="qText">키워드 (제목/기관/장소)</label>
-      <input id="qText" type="text" placeholder="예: 환경, 은평구청, 재택봉사 등" />
-    </div>
-    <div class="fld">
-      <label for="minNmpr">모집인원 (이상)</label>
-      <input id="minNmpr" type="number" min="0" value="10" />
-    </div>
-  </div>
-
-  <div class="row">
-    <div class="fld">
-      <label for="volBg">봉사기간 (시작)</label>
-      <input id="volBg" type="date" />
-    </div>
-    <div class="fld">
-      <label for="volEd">봉사기간 (종료)</label>
-      <input id="volEd" type="date" />
-    </div>
-  </div>
-
-  <div class="note">
-    <span class="dot"></span>
-    봉사시간 필터는 활동기간이 지정 범위와 겹치는 공고만 남깁니다. 공고판 날짜/시간은 간혹 공고만 남길 수 있어요.
-  </div>
-
-  <div class="actions">
-    <button class="btn primary" id="btnSearch">검색</button>
-    <button class="btn" id="btnReset">초기화</button>
-    <a class="btn right" href="docs/data/1365.json" target="_blank" rel="noopener">원본 JSON</a>
-  </div>
-
-  <div class="count muted">표시: <span id="shown">0</span>건</div>
-
-  <table class="results-table">
-    <thead>
-      <tr>
-        <th style="width:64px">번호</th>
-        <th>제목</th>
-        <th>봉사기간</th>
-        <th>봉사시간</th>
-        <th>모집기한(종료)</th>
-        <th style="width:90px">모집인원</th>
-        <th>등록기관</th>
-        <th>봉사지역/장소</th>
-      </tr>
-    </thead>
-    <tbody id="tbody">
-      <tr><td class="empty" colspan="8">표시할 데이터가 없습니다.</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<script>
-(async function(){
-  const $ = (sel)=>document.querySelector(sel);
-  const metaUpdated = $("#meta-updated");
-  const metaCount   = $("#meta-count");
-  const metaFilter  = $("#meta-filter");
-  const shownEl     = $("#shown");
-  const tbody       = $("#tbody");
-
-  const qRegion = $("#qRegion");
-  const qText   = $("#qText");
-  const minNmpr = $("#minNmpr");
-  const volBg   = $("#volBg");
-  const volEd   = $("#volEd");
-  const btnSearch = $("#btnSearch");
-  const btnReset  = $("#btnReset");
-
-  // 포맷 유틸
-  const ymd = (v) => String(v||"").replace(/\D/g,"").slice(0,8);
-  const prettyYmd = (v) => {
-    const s = ymd(v);
-    return s.length===8 ? `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}` : "";
-  };
-  const pad2 = (n)=> String(n).padStart(2,"0");
-  const timeStr = (bH,bM,eH,eM)=>{
-    if(!bH && !eH) return "";
-    const bh=pad2(bH||0), bm=pad2(bM||0), eh=pad2(eH||0), em=pad2(eM||0);
-    return `${bh}:${bm} ~ ${eh}:${em}`;
-  };
-
-  // 데이터 로드
-  let raw = null;
-  try{
-    const res = await fetch("docs/data/1365.json",{cache:"no-store"});
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    raw = await res.json();
-  }catch(err){
-    tbody.innerHTML = `<tr><td colspan="8" class="empty">데이터를 불러오지 못했습니다: ${String(err.message||err)}</td></tr>`;
-    return;
-  }
-
-  // 메타
-  metaUpdated.textContent = `업데이트: ${new Date(raw.updatedAt).toLocaleString("ko-KR")} `
-  metaCount.textContent   = `총: ${raw.count}건`;
-  metaFilter.textContent  = `(정렬: 모집기한 종료일 ↑)`;
-
-  // 가공
-  const srcItems = (raw.items||[]).map(it=>{
-    const nb = ymd(it.noticeBgnde);
-    const ne = ymd(it.noticeEndde);
-    const pb = ymd(it.progrmBgnde);
-    const pe = ymd(it.progrmEndde);
-
-    const bH = (it.actBeginTm||"").toString().trim();
-    const bM = (it.actBeginMnt||"").toString().trim();
-    const eH = (it.actEndTm||"").toString().trim();
-    const eM = (it.actEndMnt||"").toString().trim();
-
-    return {
-      id: it.progrmRegistNo,
-      title: it.progrmSj || "",
-      nb, ne, pb, pe,
-      place: it.actPlace || "",
-      org: it.nanmmbyNm || "",      // 등록기관
-      mnnstNm: it.mnnstNm || "",    // (공고상 모집기관은 표시하지 않음)
-      rcrit: Number((it.rcritNmpr||"").toString().replace(/\D/g,"")||0),
-      timeStr: timeStr(bH,bM,eH,eM)
+  <script>
+    // ---------- 유틸 ----------
+    const S = (v) => (v == null ? "" : String(v));
+    const d8 = (v) => {
+      const s = S(v).replace(/\D/g, "");
+      return s.length >= 8 ? s.slice(0,8) : "99999999";
     };
-  });
+    const fmtD8 = (v) => {
+      const s = d8(v);
+      return s === "99999999" ? "" : `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+    };
+    const to8 = (yyyy_mm_dd) => S(yyyy_mm_dd).replace(/\D/g,"").slice(0,8);
 
-  // 정렬: 모집기한(종료) 오름차순
-  srcItems.sort((a,b)=> (a.ne||"99999999").localeCompare(b.ne||"99999999"));
+    // ---------- 상태 ----------
+    let ALL = [];
+    let META = { updatedAt: "", count: 0 };
 
-  function overlaps(aStart, aEnd, bStart, bEnd){
-    if(!aStart || !aEnd || !bStart || !bEnd) return true; // 한쪽이 비면 관대하게 통과
-    return !(aEnd < bStart || bEnd < aStart);
-  }
-
-  function apply(){
-    const rg  = qRegion.value.trim();
-    const key = qText.value.trim();
-    const min = Number(minNmpr.value || 0);
-    const vb  = ymd(volBg.value);
-    const ve  = ymd(volEd.value);
-
-    const rgRe  = rg ? new RegExp(rg.replace(/\s+/g,".*"), "i") : null;
-    const keyRe = key? new RegExp(key.replace(/\s+/g,".*"), "i") : null;
-
-    const out = [];
-    for(const it of srcItems){
-      if(keyRe){
-        const hay = `${it.title} ${it.org} ${it.place} ${it.mnnstNm}`;
-        if(!keyRe.test(hay)) continue;
-      }
-      if(rgRe){
-        const hay = `${it.place} ${it.org} ${it.mnnstNm}`;
-        if(!rgRe.test(hay)) continue;
-      }
-      if(it.rcrit < min) continue;
-
-      // 봉사기간 겹침
-      if(vb || ve){
-        const s = vb || it.pb, e = ve || it.pe;
-        if(!overlaps(it.pb, it.pe, s, e)) continue;
-      }
-
-      out.push(it);
+    function setMeta() {
+      const m = document.getElementById("meta");
+      const when = META.updatedAt ? new Date(META.updatedAt).toLocaleString() : "-";
+      m.textContent = `업데이트: ${when} · 원본 ${META.count}건 (정렬: 모집기한 종료일 ↑)`;
     }
 
-    render(out);
-  }
-
-  function render(list){
-    shownEl.textContent = list.length.toLocaleString();
-    if(!list.length){
-      tbody.innerHTML = `<tr><td colspan="8" class="empty">표시할 데이터가 없습니다.</td></tr>`;
-      return;
+    function setCount(n) {
+      document.getElementById("count").textContent = `표시: ${n}건`;
     }
-    const rows = list.map((it, idx)=>`
-      <tr>
-        <td>${idx+1}</td>
-        <td class="col-title">
-          <a class="title" href="https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(it.id)}" target="_blank" rel="noopener">${escapeHtml(it.title)}</a>
-        </td>
-        <td>${prettyYmd(it.pb)} ~ ${prettyYmd(it.pe)}</td>
-        <td>${it.timeStr||""}</td>
-        <td>${prettyYmd(it.ne)}</td>
-        <td>${it.rcrit||""}</td>
-        <td>${escapeHtml(it.org)}</td>
-        <td>${escapeHtml(it.place)}</td>
-      </tr>
-    `).join("");
-    tbody.innerHTML = rows;
-  }
 
-  function reset(){
-    qRegion.value = "";
-    qText.value   = "";
-    minNmpr.value = "10";
-    volBg.value = "";
-    volEd.value = "";
-    apply();
-  }
+    function linkFor(it) {
+      return `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(S(it.progrmRegistNo))}`;
+    }
 
-  function escapeHtml(s){
-    return String(s||"")
-      .replaceAll("&","&amp;").replaceAll("<","&lt;")
-      .replaceAll(">","&gt;").replaceAll('"',"&quot;");
-  }
+    function render(items) {
+      // 모집기한(종료) 기준 오름차순 정렬 (안전 키 사용)
+      items = [...items].sort((a,b) => d8(a.noticeEndde).localeCompare(d8(b.noticeEndde)));
 
-  // 초기 표시
-  apply();
+      const tbody = document.querySelector("#tbl tbody");
+      if (!items.length) {
+        tbody.innerHTML = "";
+        document.getElementById("empty").style.display = "block";
+        setCount(0);
+        return;
+      }
+      document.getElementById("empty").style.display = "none";
 
-  // 이벤트
-  btnSearch.addEventListener("click", apply);
-  btnReset.addEventListener("click", reset);
-  // Enter로 제출
-  [qRegion,qText,minNmpr,volBg,volEd].forEach(el=>{
-    el.addEventListener("keydown", (e)=>{ if(e.key==="Enter") apply(); });
-  });
-})();
-</script>
+      tbody.innerHTML = items.map((it, i) => {
+        const volDate =
+          (it.progrmBgnde && it.progrmEndde)
+            ? `${fmtD8(it.progrmBgnde)} ~ ${fmtD8(it.progrmEndde)}`
+            : "";
+
+        const noticeEnd = fmtD8(it.noticeEndde) || "-";
+
+        const time =
+          (S(it.actBeginTm) && S(it.actEndTm))
+            ? `${S(it.actBeginTm).padStart(2,"0")}:${S(it.actBeginMnt||"00").padStart(2,"0")} ~ ${S(it.actEndTm).padStart(2,"0")}:${S(it.actEndMnt||"00").padStart(2,"0")}`
+            : "-";
+
+        return `
+          <tr>
+            <td>${i+1}</td>
+            <td class="title"><a class="title-link" href="${linkFor(it)}" target="_blank" rel="noopener">${S(it.progrmSj)}</a></td>
+            <td>${volDate}</td>
+            <td>${time}</td>
+            <td>${noticeEnd}</td>
+            <td>${S(it.rcritNmpr) || "-"}</td>
+            <td>${S(it.nanmmbyNm) || "-"}</td>
+            <td>${S(it.actPlace) || "-"}</td>
+          </tr>
+        `;
+      }).join("");
+
+      setCount(items.length);
+    }
+
+    function applyFilter() {
+      const q  = document.getElementById("q").value.trim();
+      const rq = document.getElementById("rq").value.trim();
+      const minRecruit = document.getElementById("minRecruit").value.trim();
+      const from = document.getElementById("from").value;
+      const to   = document.getElementById("to").value;
+
+      const from8 = from ? to8(from) : "";
+      const to8v  = to   ? to8(to)   : "";
+
+      let out = ALL;
+
+      // 키워드(제목/기관/장소)
+      if (q) {
+        const qq = q.toLowerCase();
+        out = out.filter(it => {
+          const hay = (S(it.progrmSj) + " " + S(it.mnnstNm) + " " + S(it.nanmmbyNm) + " " + S(it.actPlace)).toLowerCase();
+          return hay.includes(qq);
+        });
+      }
+
+      // 봉사지역(키워드) : 장소 + 등록기관
+      if (rq) {
+        const rr = rq.toLowerCase();
+        out = out.filter(it => {
+          const hay = (S(it.actPlace) + " " + S(it.nanmmbyNm)).toLowerCase();
+          return hay.includes(rr);
+        });
+      }
+
+      // 모집인원 (이상)
+      if (minRecruit) {
+        const need = parseInt(minRecruit, 10);
+        if (!isNaN(need)) {
+          out = out.filter(it => {
+            const n = parseInt(S(it.rcritNmpr).replace(/\D/g,"") || "0", 10);
+            return n >= need;
+          });
+        }
+      }
+
+      // 봉사기간 교집합 판정
+      if (from8 || to8v) {
+        out = out.filter(it => {
+          const bg = d8(it.progrmBgnde);
+          const ed = d8(it.progrmEndde);
+          if (bg === "99999999" && ed === "99999999") return false;
+
+          const s = from8 || "00000000";
+          const e = to8v  || "99999999";
+          return (ed >= s) && (bg <= e);
+        });
+      }
+
+      render(out);
+    }
+
+    function resetFilter() {
+      document.getElementById("q").value = "";
+      document.getElementById("rq").value = "";
+      document.getElementById("minRecruit").value = "";
+      document.getElementById("from").value = "";
+      document.getElementById("to").value = "";
+      render(ALL);
+    }
+
+    // ---------- 초기화 ----------
+    (async function init(){
+      try {
+        const res = await fetch("./data/1365.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const j = await res.json();
+
+        META.updatedAt = j.updatedAt || "";
+        META.count     = j.count || (Array.isArray(j.items) ? j.items.length : 0);
+        setMeta();
+
+        ALL = Array.isArray(j.items) ? j.items : [];
+        render(ALL);
+      } catch (err) {
+        console.error(err);
+        document.getElementById("error").style.display = "block";
+        document.querySelector("#tbl tbody").innerHTML = "";
+        setCount(0);
+        document.getElementById("meta").textContent = "데이터를 불러오지 못했습니다.";
+      }
+
+      document.getElementById("searchBtn").addEventListener("click", (e)=>{ e.preventDefault(); applyFilter(); });
+      document.getElementById("resetBtn").addEventListener("click", (e)=>{ e.preventDefault(); resetFilter(); });
+
+      // Enter 키로도 검색되게
+      ["q","rq","minRecruit","from","to"].forEach(id=>{
+        const el = document.getElementById(id);
+        el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") { e.preventDefault(); applyFilter(); } });
+      });
+    })();
+  </script>
 </body>
 </html>

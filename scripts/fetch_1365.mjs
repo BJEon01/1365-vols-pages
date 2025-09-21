@@ -12,20 +12,25 @@ import { parseStringPromise } from "xml2js";
 const SERVICE_KEY = process.env.SERVICE_KEY?.trim();
 if (!SERVICE_KEY) throw new Error("SERVICE_KEY missing");
 
+// 공지기간은 기본 사용 안 함 (요청대로 제거)
+const USE_NOTICE_RANGE = (process.env.USE_NOTICE_RANGE ?? "false") === "true";
 const OFFSET_BG   = Number(process.env.OFFSET_BG ?? 0);   // 오늘 + offset
 const OFFSET_ED   = Number(process.env.OFFSET_ED ?? 30);
 
-const SIDO_NAME   = (process.env.SIDO_NAME || "").trim();   // 서울 같은 텍스트 보정(선택)
-const SIDO_CODE   = (process.env.SIDO_CODE || "").trim();   // 6110000 (서울)
-const GUGUN_CODE  = (process.env.GUGUN_CODE || "").trim();  // 시군구 코드 (미지정 = 전체)
+// 지역/상태 기본값 (요청사항 반영)
+const SIDO_NAME   = (process.env.SIDO_NAME || "").trim();   // 선택 텍스트 보정
+const SIDO_CODE   = (process.env.SIDO_CODE || "6110000").trim(); // 기본: 서울
+const GUGUN_CODE  = (process.env.GUGUN_CODE || "").trim();  // 시군구 (빈=전체)
 
-const PROGRM_STTUS_SE = (process.env.PROGRM_STTUS_SE || "").trim(); // 2=모집중
-const RECRUITING_ONLY = (process.env.RECRUITING_ONLY ?? "true") === "true"; // true면 '오늘이 모집기간'인 것만 로컬 필터
+const PROGRM_STTUS_SE = (process.env.PROGRM_STTUS_SE || "2").trim(); // 기본=모집중(2)
+const RECRUITING_ONLY = (process.env.RECRUITING_ONLY ?? "false") === "true"; // 로컬 notice 기간 보정(기본 off)
 
+// 페이징/키워드
 const PER        = Number(process.env.PER || 100);
 const MAX_PAGES  = Number(process.env.MAX_PAGES || 50); // 100*50=5000
 const KEYWORD    = (process.env.KEYWORD || "").trim();
 
+// 상세 병렬
 const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
@@ -159,7 +164,7 @@ let cache = {};
 try { cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8")); } catch { cache = {}; }
 
 // ====== 수집 ======
-console.log("▶ params", { NOTICE_BG, NOTICE_ED, SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE, RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES });
+console.log("▶ params", { USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED, SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE, RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES });
 
 let page = 1;
 const all = [];
@@ -169,14 +174,16 @@ while (true) {
   const qs = new URLSearchParams({
     numOfRows: String(PER),
     pageNo: String(page),
-    noticeBgnde: NOTICE_BG,
-    noticeEndde: NOTICE_ED,
     _type: "json"
   });
+  if (USE_NOTICE_RANGE) {
+    qs.set("noticeBgnde", NOTICE_BG);
+    qs.set("noticeEndde", NOTICE_ED);
+  }
   if (KEYWORD) qs.set("keyword", KEYWORD);
   if (SIDO_CODE) qs.set("sidoCd", SIDO_CODE);
   if (GUGUN_CODE) qs.set("gugunCd", GUGUN_CODE);
-  if (PROGRM_STTUS_SE) qs.set("progrmSttusSe", PROGRM_STTUS_SE);
+  if (PROGRM_STTUS_SE) qs.set("progrmSttusSe", PROGRM_STTUS_SE); // 2=모집중
 
   const url = `${EP}?serviceKey=${SERVICE_KEY}&${qs.toString()}`;
   const { data, headers, status } = await AX.get(url, { transformResponse: [d=>d] });
@@ -189,30 +196,30 @@ while (true) {
   console.log(`page=${page} total=${total} pageItems=${items.length}`);
 
   for (const it of items) {
-    // (선택) 서울 텍스트 보정
+    // (선택) 텍스트 보정
     if (SIDO_NAME) {
       const text = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
       if (!text.includes(SIDO_NAME)) continue;
     }
-    // (로컬 보정) 모집기간에 오늘 포함
+    // (선택) 로컬 notice 기간 보정
     if (RECRUITING_ONLY) {
       const nb = S(it.noticeBgnde);
       const ne = S(it.noticeEndde);
       if (!(isYmd(nb) && isYmd(ne) && between(ymd(today), nb, ne))) continue;
     }
 
-    // 표준화된 base
+    // 표준화
     const base = {
       progrmRegistNo: S(it.progrmRegistNo),
       progrmSj:       S(it.progrmSj),
 
-      // 날짜는 항상 "YYYYMMDD"
+      // 날짜는 "YYYYMMDD"
       progrmBgnde:    D8(it.progrmBgnde),
       progrmEndde:    D8(it.progrmEndde),
       noticeBgnde:    D8(it.noticeBgnde),
       noticeEndde:    D8(it.noticeEndde),
 
-      // 숫자여도 문자열로 고정
+      // 모집인원
       rcritNmpr:      S(it.rcritNmpr).trim(),
 
       // 기관/장소
@@ -220,7 +227,7 @@ while (true) {
       nanmmbyNm:      S(it.nanmmbyNm),
       actPlace:       S(it.actPlace),
 
-      // 봉사시간 (API에 있으면 사용) → "HH" / "mm" 2자리 보장
+      // 봉사시간 (있을 때만 표기)
       actBeginTm:     P2(it.actBeginTm),
       actBeginMnt:    P2(it.actBeginMnt),
       actEndTm:       P2(it.actEndTm),
@@ -264,7 +271,8 @@ fs.mkdirSync("docs/data", { recursive: true });
 fs.writeFileSync("docs/data/1365.json", JSON.stringify({
   updatedAt: new Date().toISOString(),
   params: {
-    NOTICE_BG, NOTICE_ED, OFFSET_BG, OFFSET_ED,
+    USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
+    OFFSET_BG, OFFSET_ED,
     SIDO_NAME, SIDO_CODE, GUGUN_CODE,
     PROGRM_STTUS_SE, RECRUITING_ONLY,
     PER, MAX_PAGES, KEYWORD,
@@ -276,7 +284,7 @@ fs.writeFileSync("docs/data/1365.json", JSON.stringify({
 }, null, 2), "utf-8");
 
 // 캐시도 저장
-fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
+fs.writeFileSync("docs/data/recruit_cache.json", JSON.stringify(cache, null, 2), "utf-8");
 
 console.log(`✅ Saved docs/data/1365.json with ${all.length} items`);
 console.log(`   ▶ 모집인원 채움: API=${filledApi}, 상세=${filledDetail}, 미확인=${stillEmpty}, 상세시도=${triedDetail}`);

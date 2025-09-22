@@ -34,6 +34,11 @@
       --brand-soft-border: #C8E6EE;
       --brand-soft-text: #0f2d34;
       --ring: rgba(148,210,223,.35);
+
+      --btn-brand: #D6EEF4;            /* ← 현재보다 진하고, 처음(#94D2DF)보단 연함 */
+      --btn-brand-border: #BDE3ED;
+      --brand-soft-text: #0f2d34;
+      --ring: rgba(148,210,223,.35);
     }
     * { box-sizing: border-box; }
     body {
@@ -86,12 +91,15 @@
     }
     /* ✅ 검색 버튼을 머리행과 같은 연한 청록으로 */
     #searchBtn.primary{
-      background: var(--brand-soft);
-      border-color: var(--brand-soft-border);
+      background: var(--btn-brand);
+      border-color: var(--btn-brand-border);
       color: var(--brand-soft-text);
     }
-    #searchBtn.primary:hover{ filter: brightness(0.98); }
-    #searchBtn.primary:focus{ box-shadow: 0 0 0 3px var(--ring); outline: none; }
+    #searchBtn.primary:hover{ background: #CFE8F0; }   /* 살짝 더 진해지는 호버 */
+    #searchBtn.primary:focus{
+      box-shadow: 0 0 0 3px var(--ring);
+      outline: none;
+    }
 
     .count { font-size: 14px; color: var(--fg); font-weight: 600; margin: 6px 0 10px; }
 
@@ -362,3 +370,4 @@
   </script>
 </body>
 </html>
+

@@ -29,14 +29,14 @@
       --bg: #fff;
       --accent: #111827;
 
-      /* 연한 청록(머리행 & 검색 버튼 공통) */
+      /* 머리행(연한 청록) */
       --brand-soft: #EAF7FA;
       --brand-soft-border: #C8E6EE;
-      --brand-soft-text: #0f2d34;
-      --ring: rgba(148,210,223,.35);
 
-      --btn-brand: #D6EEF4;            /* ← 현재보다 진하고, 처음(#94D2DF)보단 연함 */
+      /* 버튼 톤(머리행보다 살짝 진하게) */
+      --btn-brand: #D6EEF4;
       --btn-brand-border: #BDE3ED;
+
       --brand-soft-text: #0f2d34;
       --ring: rgba(148,210,223,.35);
     }
@@ -60,12 +60,21 @@
       align-items: center;
       margin: 0 0 12px;
     }
+    /* 로고 링크(새로고침) */
+    .logo-link{
+      display:inline-block;
+      line-height:0;
+      border-radius:8px;
+      text-decoration:none;
+    }
+    .logo-link:focus-visible{ outline: 3px solid var(--ring); }
     .header .logo {
       grid-row: 1 / 3;
       width: 52px;
       height: auto;
       object-fit: contain;
       display: block;
+      cursor: pointer;
     }
 
     .panel {
@@ -83,30 +92,27 @@
       width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
       font-size: 14px; outline: none;
     }
-    input:focus, select:focus { box-shadow: 0 0 0 3px var(--ring); border-color: var(--brand-soft-border); }
+    input:focus, select:focus { box-shadow: 0 0 0 3px var(--ring); border-color: var(--btn-brand-border); }
 
     .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
     button {
       border: 1px solid var(--line); padding: 8px 12px; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px;
     }
-    /* ✅ 검색 버튼을 머리행과 같은 연한 청록으로 */
+    /* 검색 버튼(머리행보다 살짝 진한 톤) */
     #searchBtn.primary{
       background: var(--btn-brand);
       border-color: var(--btn-brand-border);
       color: var(--brand-soft-text);
     }
-    #searchBtn.primary:hover{ background: #CFE8F0; }   /* 살짝 더 진해지는 호버 */
-    #searchBtn.primary:focus{
-      box-shadow: 0 0 0 3px var(--ring);
-      outline: none;
-    }
+    #searchBtn.primary:hover{ background: #CFE8F0; }
+    #searchBtn.primary:focus{ box-shadow: 0 0 0 3px var(--ring); outline: none; }
 
     .count { font-size: 14px; color: var(--fg); font-weight: 600; margin: 6px 0 10px; }
 
     table { width: 100%; border-collapse: collapse; }
     thead th {
       position: sticky; top: 0; z-index: 1;
-      background: var(--brand-soft);            /* ✅ 머리행 색 */
+      background: var(--brand-soft);
       border-bottom: 1px solid var(--brand-soft-border);
       padding: 10px 8px; font-size: 13px; white-space: nowrap;
       text-align: center;
@@ -133,7 +139,10 @@
   <div class="wrap">
     <!-- 헤더 -->
     <div class="header">
-      <img src="./data/logo.png?v=1" alt="동아리 로고" class="logo" fetchpriority="high" />
+      <!-- 로고 클릭 시 새로고침 -->
+      <a id="logoLink" href="./" class="logo-link" aria-label="로고: 새로고침">
+        <img src="./data/logo.png?v=1" alt="동아리 로고" class="logo" fetchpriority="high" />
+      </a>
       <h1>1365 · 서울</h1>
       <div class="meta" id="meta">로딩 중…</div>
     </div>
@@ -366,8 +375,16 @@
         const el = document.getElementById(id);
         el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") { e.preventDefault(); applyFilter(); } });
       });
+
+      // ✅ 로고 클릭 시 새로고침
+      const logoLink = document.getElementById('logoLink');
+      if (logoLink){
+        logoLink.addEventListener('click', (e)=>{
+          e.preventDefault();
+          window.location.reload();
+        });
+      }
     })();
   </script>
 </body>
 </html>
-

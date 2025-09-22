@@ -66,10 +66,10 @@
       line-height:0;
       border-radius:8px;
       text-decoration:none;
+      grid-row: 1 / 3;     /* ← 이 줄 추가(핵심) */
     }
     .logo-link:focus-visible{ outline: 3px solid var(--ring); }
-    .header .logo {
-      grid-row: 1 / 3;
+    .header .logo{
       width: 52px;
       height: auto;
       object-fit: contain;
@@ -388,3 +388,4 @@
   </script>
 </body>
 </html>
+

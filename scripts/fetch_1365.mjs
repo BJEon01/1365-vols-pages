@@ -1,5 +1,6 @@
 // Node 18+ / ESM
 // 서울 25개 구로 샤딩해 처음부터 서울 결과를 많이 모으는 버전
+// + 상세페이지에서 "모집인원"과 "신청인원"을 함께 추출해 보강
 
 import fs from "fs";
 import http from "http";
@@ -59,7 +60,6 @@ const AX = axios.create({
 // ====== 지역 힌트 ======
 const SIDO_TEXT_HINT = {
   "6110000": ["서울", "서울특별시"],
-  // 필요한 시도 추가시 여기에...
 };
 
 const SEOUL_GUGUN = [
@@ -84,44 +84,77 @@ function uniqBy(arr, key){
   return out;
 }
 
-// 상세 HTML에서 '모집인원' 추출(빠른 정규식)
-function extractRecruit(html) {
+// 숫자만 추출
+const pickNumber = (txt) => {
+  const m = String(txt).match(/([0-9][0-9,]*)\s*명/i);
+  return m ? m[1].replace(/,/g,"") : "";
+};
+
+// 라벨 기반 숫자 추출기 (dt/dd, th/td, 근처 스캔)
+function extractCountByLabels(html, labels) {
   const s = String(html);
-  let pos = s.indexOf(">모집인원<");
-  if (pos === -1) pos = s.search(/<dt[^>]*>\s*모집\s*인원\s*<\/dt>/i);
-  if (pos !== -1) {
-    const ddOpen = s.indexOf("<dd", pos);
-    if (ddOpen !== -1) {
-      const contOpen = s.indexOf(">", ddOpen) + 1;
-      const ddClose = s.indexOf("</dd>", contOpen);
-      if (contOpen > 0 && ddClose > contOpen) {
-        const text = s.slice(contOpen, ddClose).replace(/<[^>]+>/g, " ");
-        const m = text.match(/([0-9][0-9,]*)\s*명/i);
-        if (m) return m[1].replace(/,/g, "");
-      }
+
+  for (const label of labels) {
+    const labelRe = new RegExp(label, "i");
+
+    // 1) <dt>라벨</dt> 다음 <dd>
+    let m = s.match(new RegExp(`<dt[^>]*>\\s*(?:${label})\\s*<\\/dt>[\\s\\S]{0,200}?(<dd[^>]*>[\\s\\S]*?<\\/dd>)`, "i"));
+    if (m) {
+      const txt = m[1].replace(/<[^>]+>/g, " ");
+      const n = pickNumber(txt);
+      if (n) return n;
+    }
+
+    // 2) <th>라벨</th> 인접 <td>
+    m = s.match(new RegExp(`<th[^>]*>\\s*(?:${label})[\\s\\S]{0,120}?<td[^>]*>([\\s\\S]{0,100}?)<\\/td>`, "i"));
+    if (m) {
+      const txt = m[1].replace(/<[^>]+>/g, " ");
+      const n = pickNumber(txt);
+      if (n) return n;
+    }
+
+    // 3) 라벨 근처 윈도우 스캔 (앞쪽 첫 번째 "XX명")
+    m = s.match(new RegExp(`(?:${label})[\\s\\S]{0,300}?([0-9][0-9,]*)\\s*명`, "i"));
+    if (m) {
+      const n = (m[1] || "").replace(/,/g,"");
+      if (n) return n;
     }
   }
-  let m = s.match(/<th[^>]*>\s*모집\s*인원[\s\S]{0,100}?<td[^>]*>([\s\S]{0,80}?)<\/td>/i);
-  if (m) {
-    const n = m[1].replace(/<[^>]+>/g, " ").match(/([0-9][0-9,]*)\s*명/i);
-    if (n) return n[1].replace(/,/g, "");
-  }
-  const i = s.search(/모집\s*인원/i);
-  if (i >= 0) {
-    const w = s.slice(i, i + 500).replace(/<[^>]+>/g, " ");
-    const n = w.match(/([0-9][0-9,]*)\s*명/i);
-    if (n) return n[1].replace(/,/g, "");
-  }
   return "";
+}
+
+// 상세 페이지에서 모집/신청 동시 추출
+function extractCounts(html) {
+  const recruit = extractCountByLabels(html, [
+    "모집\\s*인원",
+    "총\\s*모집\\s*인원"
+  ]);
+
+  // 신청인원 / 신청자 / 신청현황(보통 "0명 / 10명" 형태면 앞 숫자를 잡음)
+  let applied = extractCountByLabels(html, [
+    "신청\\s*인원",
+    "신청\\s*현황",
+    "신청\\s*자(?:\\s*수)?",
+    "현재\\s*신청"
+  ]);
+
+  // 혹시 "신청 3명 / 모집 10명" 같이 붙어 있을 때 보정
+  if (!applied) {
+    const s = String(html).replace(/<[^>]+>/g, " ");
+    const m = s.match(/신청[^0-9]{0,10}?([0-9][0-9,]*)\s*명\s*\/\s*([0-9][0-9,]*)\s*명/);
+    if (m) applied = m[1].replace(/,/g,"");
+  }
+
+  return { recruit, applied };
 }
 
 const DETAIL_URL = pid =>
   `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(pid)}`;
 
-async function fetchRecruitFromDetail(pid) {
+async function fetchDetailCounts(pid) {
   const { data, status } = await AX.get(DETAIL_URL(pid), { responseType: "text" });
-  if (status >= 400) return "";
-  return extractRecruit(data);
+  if (status >= 400) return { recruit: "", applied: "" };
+  return extractCounts(data);
 }
 
 async function parseBody(data, headers){
@@ -166,6 +199,27 @@ const limit = pLimit(DETAIL_CONCURRENCY);
 const CACHE_PATH = "docs/data/recruit_cache.json";
 let cache = {};
 try { cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8")); } catch { cache = {}; }
+
+// 구 캐시 호환 + 읽기/쓰기 헬퍼
+function readCache(pid) {
+  const c = cache[pid];
+  if (!c) return { recruit: "", applied: "" };
+  if (typeof c === "string") return { recruit: c, applied: "" };            // 최구버전
+  if (c && typeof c === "object") {
+    return {
+      recruit: c.recruit ?? c.value ?? "",
+      applied: c.applied ?? c.aplyNmpr ?? ""
+    };
+  }
+  return { recruit: "", applied: "" };
+}
+function writeCache(pid, recruit, applied) {
+  cache[pid] = {
+    recruit: recruit || "",
+    applied: applied || "",
+    fetchedAt: new Date().toISOString()
+  };
+}
 
 // ====== 한 번의 리스트 호출 (키워드 추가 인자 지원) ======
 async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" } = {}){
@@ -224,6 +278,8 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
         noticeBgnde:    it.noticeBgnde ?? "",
         noticeEndde:    it.noticeEndde ?? "",
         rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
+        // NEW: 신청인원은 API에 없어서 상세에서 채움
+        aplyNmpr:       "",
         mnnstNm:        it.mnnstNm ?? "",
         nanmmbyNm:      it.nanmmbyNm ?? "",
         actPlace:       it.actPlace ?? "",
@@ -272,22 +328,37 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
     collected = await fetchListOnce();
   }
 
-  // ====== 상세 보강(모집인원) ======
-  const needs = collected.filter(it => !it.rcritNmpr).slice(0, MAX_DETAIL);
-  let filledApi = collected.length - needs.length;
-  let filledDetail = 0, stillEmpty = 0, triedDetail = 0;
+  // ====== 상세 보강(모집/신청 인원) ======
+  // 캐시 반영(있으면 즉시 넣고, 없거나 부족하면 상세 fetch)
+  let filledApiRecruit = 0;
+  let filledDetailRecruit = 0;
+  let filledDetailApplied = 0;
+  let stillEmptyRecruit = 0;
+  let stillEmptyApplied = 0;
+  let triedDetail = 0;
+
+  for (const it of collected) {
+    const c = readCache(it.progrmRegistNo);
+    if (!it.rcritNmpr && c.recruit) it.rcritNmpr = c.recruit;
+    if (!it.aplyNmpr && c.applied) it.aplyNmpr = c.applied;
+    if (it.rcritNmpr) filledApiRecruit++;
+  }
+
+  const needDetail = collected.filter(it => (!it.rcritNmpr || !it.aplyNmpr)).slice(0, MAX_DETAIL);
 
   const limiter = pLimit(DETAIL_CONCURRENCY);
-  await Promise.all(needs.map(it => limiter(async () => {
-    const c = cache[it.progrmRegistNo];
-    if (c && c.value) { it.rcritNmpr = c.value; return; }
-
+  await Promise.all(needDetail.map(it => limiter(async () => {
     if (DETAIL_DELAY_MS) await new Promise(r=>setTimeout(r, DETAIL_DELAY_MS));
     triedDetail++;
-    const v = await fetchRecruitFromDetail(it.progrmRegistNo);
-    if (v) { it.rcritNmpr = v; filledDetail++; }
-    else { stillEmpty++; }
-    cache[it.progrmRegistNo] = { value: it.rcritNmpr || "", fetchedAt: new Date().toISOString() };
+    const { recruit, applied } = await fetchDetailCounts(it.progrmRegistNo);
+
+    if (recruit && !it.rcritNmpr) { it.rcritNmpr = recruit; filledDetailRecruit++; }
+    if (applied)                 { it.aplyNmpr  = applied; filledDetailApplied++; }
+
+    if (!it.rcritNmpr) stillEmptyRecruit++;
+    if (!it.aplyNmpr)  stillEmptyApplied++;
+
+    writeCache(it.progrmRegistNo, it.rcritNmpr || recruit || "", it.aplyNmpr || applied || "");
   })));
 
   // 정렬: 모집기간 종료일 오름차순
@@ -311,7 +382,12 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
       SHARD_GUGUN, DESIRED_MIN,
       DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL
     },
-    stat: { filledApi, filledDetail, stillEmpty, total: collected.length, triedDetail },
+    stat: {
+      total: collected.length,
+      triedDetail,
+      recruit: { fromApi: filledApiRecruit, fromDetail: filledDetailRecruit, stillEmpty: stillEmptyRecruit },
+      applied: { fromDetail: filledDetailApplied, stillEmpty: stillEmptyApplied }
+    },
     count: collected.length,
     items: collected
   }, null, 2), "utf-8");
@@ -319,7 +395,8 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
 
   console.log(`✅ Saved docs/data/1365.json with ${collected.length} items`);
-  console.log(`   ▶ 모집인원 채움: API=${filledApi}, 상세=${filledDetail}, 미확인=${stillEmpty}, 상세시도=${triedDetail}`);
+  console.log(`   ▶ 모집인원 채움: API=${filledApiRecruit}, 상세=${filledDetailRecruit}, 미확인=${stillEmptyRecruit}`);
+  console.log(`   ▶ 신청인원 채움: 상세=${filledDetailApplied}, 미확인=${stillEmptyApplied}`);
 })().catch(e => {
   console.error(e);
   process.exit(1);

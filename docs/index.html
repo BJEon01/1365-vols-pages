@@ -95,14 +95,15 @@
     .count { font-size: 14px; color: var(--fg); font-weight: 600; margin: 6px 0 10px; }
 
     table { width: 100%; border-collapse: collapse; }
-    thead th {
+/* 테이블 머리행 - 은은한 청록 톤 */
+    thead th{
       position: sticky; top: 0; z-index: 1;
-      /* ✅ 테이블 머리행 요청 색상(#94D2DF) */
-      background: var(--brand);
-      border-bottom: 1px solid var(--brand-darker);
+      background: #EAF7FA;           /* ← #94D2DF를 아주 연하게 */
+      border-bottom: 1px solid #C8E6EE;
       padding: 10px 8px; font-size: 13px; white-space: nowrap;
       text-align: center;
     }
+
     tbody td {
       border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 14px; text-align: center;
       vertical-align: middle;
@@ -372,3 +373,4 @@
   </script>
 </body>
 </html>
+

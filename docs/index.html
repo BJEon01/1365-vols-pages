@@ -16,7 +16,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://bjeon01.github.io/1365-vols-pages/data/logo.png">
 
-  <!-- 파비콘(브라우저 탭 아이콘) : 같은 파일 사용 -->
+  <!-- 파비콘 -->
   <link rel="icon" href="./data/logo.png?v=1" type="image/png" sizes="any">
   <link rel="apple-touch-icon" href="./data/logo.png?v=1">
   <meta name="theme-color" content="#111827">
@@ -29,10 +29,11 @@
       --bg: #fff;
       --accent: #111827;
 
-      /* 요청 색상 */
-      --brand: #94D2DF;
-      --brand-darker: #7cc3d3;
-      --brand-text: #0f2d34; /* 버튼 글자색(가독성) */
+      /* 연한 청록(머리행 & 검색 버튼 공통) */
+      --brand-soft: #EAF7FA;
+      --brand-soft-border: #C8E6EE;
+      --brand-soft-text: #0f2d34;
+      --ring: rgba(148,210,223,.35);
     }
     * { box-sizing: border-box; }
     body {
@@ -42,13 +43,10 @@
       background: var(--bg);
     }
 
-    /* 전체 너비 사용 */
     .wrap { width: 100%; margin: 24px 0; padding: 0 16px; }
-
     h1 { font-size: 22px; margin: 0; font-weight: 700; line-height: 1.15; letter-spacing: -0.01em; }
     .meta { color: var(--muted); font-size: 13px; }
 
-    /* ===== 헤더(로고+제목+메타) 그리드 정렬 ===== */
     .header {
       display: grid;
       grid-template-columns: auto 1fr;
@@ -57,14 +55,12 @@
       align-items: center;
       margin: 0 0 12px;
     }
-    /* 로고(페이지 안) : /data/logo.png 를 그대로 사용 */
     .header .logo {
-      grid-row: 1 / 3;             /* 로고가 제목+메타 높이를 커버 */
-      width: 52px;                  /* 필요시 44~64px로 조절 */
-      height: auto;                 /* 비율 유지 */
+      grid-row: 1 / 3;
+      width: 52px;
+      height: auto;
       object-fit: contain;
       display: block;
-      padding: 0; background: none; border: none; border-radius: 0; box-shadow: none;
     }
 
     .panel {
@@ -74,36 +70,39 @@
     .row { display: grid; gap: 10px; }
     @media (min-width: 720px) {
       .row { grid-template-columns: repeat(6, minmax(0,1fr)); align-items: end; }
-      .header .logo { width: 56px; } /* 데스크톱에서 약간 더 크게 */
+      .header .logo { width: 56px; }
     }
+
     label { font-size: 12px; color: var(--muted); display: block; margin: 4px 0; }
     input[type="text"], input[type="date"], input[type="number"], select {
       width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
-      font-size: 14px;
+      font-size: 14px; outline: none;
     }
+    input:focus, select:focus { box-shadow: 0 0 0 3px var(--ring); border-color: var(--brand-soft-border); }
+
     .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
     button {
       border: 1px solid var(--line); padding: 8px 12px; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px;
     }
-    /* ✅ 검색 버튼만 요청 색상(#94D2DF) */
-    #searchBtn.primary {
-      background: var(--brand);
-      border-color: var(--brand);
-      color: var(--brand-text);
+    /* ✅ 검색 버튼을 머리행과 같은 연한 청록으로 */
+    #searchBtn.primary{
+      background: var(--brand-soft);
+      border-color: var(--brand-soft-border);
+      color: var(--brand-soft-text);
     }
-    #searchBtn.primary:hover { filter: brightness(0.97); }
+    #searchBtn.primary:hover{ filter: brightness(0.98); }
+    #searchBtn.primary:focus{ box-shadow: 0 0 0 3px var(--ring); outline: none; }
+
     .count { font-size: 14px; color: var(--fg); font-weight: 600; margin: 6px 0 10px; }
 
     table { width: 100%; border-collapse: collapse; }
-/* 테이블 머리행 - 은은한 청록 톤 */
-    thead th{
+    thead th {
       position: sticky; top: 0; z-index: 1;
-      background: #EAF7FA;           /* ← #94D2DF를 아주 연하게 */
-      border-bottom: 1px solid #C8E6EE;
+      background: var(--brand-soft);            /* ✅ 머리행 색 */
+      border-bottom: 1px solid var(--brand-soft-border);
       padding: 10px 8px; font-size: 13px; white-space: nowrap;
       text-align: center;
     }
-
     tbody td {
       border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 14px; text-align: center;
       vertical-align: middle;
@@ -119,16 +118,13 @@
     .error { color: #b91c1c; border-color: #fecaca; background: #fff7f7; }
     .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
 
-    /* 봉사기간(3번째 열) 줄바꿈 방지 */
-    #tbl th:nth-child(3),
-    #tbl td:nth-child(3) { white-space: nowrap; }
+    #tbl th:nth-child(3), #tbl td:nth-child(3) { white-space: nowrap; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <!-- 헤더 -->
     <div class="header">
-      <!-- ✨ 이 한 줄이 페이지 안 로고입니다. 파일은 /data/logo.png 하나만 사용 -->
       <img src="./data/logo.png?v=1" alt="동아리 로고" class="logo" fetchpriority="high" />
       <h1>1365 · 서울</h1>
       <div class="meta" id="meta">로딩 중…</div>
@@ -231,7 +227,7 @@
     }
 
     function render(items) {
-      // 모집기한(종료) 기준 오름차순 정렬 (안전 키 사용)
+      // 모집기한(종료) 기준 오름차순 정렬
       items = [...items].sort((a,b) => d8(a.noticeEndde).localeCompare(d8(b.noticeEndde)));
 
       const tbody = document.querySelector("#tbl tbody");
@@ -286,7 +282,6 @@
 
       let out = ALL;
 
-      // 키워드(제목/기관/장소)
       if (q) {
         const qq = q.toLowerCase();
         out = out.filter(it => {
@@ -295,7 +290,6 @@
         });
       }
 
-      // 봉사지역(키워드) : 장소 + 등록기관
       if (rq) {
         const rr = rq.toLowerCase();
         out = out.filter(it => {
@@ -304,7 +298,6 @@
         });
       }
 
-      // 모집인원 (이상)
       if (minRecruit) {
         const need = parseInt(minRecruit, 10);
         if (!isNaN(need)) {
@@ -315,13 +308,11 @@
         }
       }
 
-      // 봉사기간 교집합 판정
       if (from8 || to8v) {
         out = out.filter(it => {
           const bg = d8(it.progrmBgnde);
           const ed = d8(it.progrmEndde);
           if (bg === "99999999" && ed === "99999999") return false;
-
           const s = from8 || "00000000";
           const e = to8v  || "99999999";
           return (ed >= s) && (bg <= e);
@@ -340,7 +331,6 @@
       render(ALL);
     }
 
-    // ---------- 초기화 ----------
     (async function init(){
       try {
         const res = await fetch("./data/1365.json", { cache: "no-store" });
@@ -364,7 +354,6 @@
       document.getElementById("searchBtn").addEventListener("click", (e)=>{ e.preventDefault(); applyFilter(); });
       document.getElementById("resetBtn").addEventListener("click", (e)=>{ e.preventDefault(); resetFilter(); });
 
-      // Enter 키로도 검색되게
       ["q","rq","minRecruit","from","to"].forEach(id=>{
         const el = document.getElementById(id);
         el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") { e.preventDefault(); applyFilter(); } });
@@ -373,4 +362,3 @@
   </script>
 </body>
 </html>
-

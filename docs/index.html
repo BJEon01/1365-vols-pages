@@ -28,6 +28,11 @@
       --line: #e5e7eb;
       --bg: #fff;
       --accent: #111827;
+
+      /* 요청 색상 */
+      --brand: #94D2DF;
+      --brand-darker: #7cc3d3;
+      --brand-text: #0f2d34; /* 버튼 글자색(가독성) */
     }
     * { box-sizing: border-box; }
     body {
@@ -80,13 +85,22 @@
     button {
       border: 1px solid var(--line); padding: 8px 12px; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px;
     }
-    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    /* ✅ 검색 버튼만 요청 색상(#94D2DF) */
+    #searchBtn.primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: var(--brand-text);
+    }
+    #searchBtn.primary:hover { filter: brightness(0.97); }
     .count { font-size: 14px; color: var(--fg); font-weight: 600; margin: 6px 0 10px; }
 
     table { width: 100%; border-collapse: collapse; }
     thead th {
-      position: sticky; top: 0; background: #f6f7fb; z-index: 1;
-      border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 13px; white-space: nowrap;
+      position: sticky; top: 0; z-index: 1;
+      /* ✅ 테이블 머리행 요청 색상(#94D2DF) */
+      background: var(--brand);
+      border-bottom: 1px solid var(--brand-darker);
+      padding: 10px 8px; font-size: 13px; white-space: nowrap;
       text-align: center;
     }
     tbody td {

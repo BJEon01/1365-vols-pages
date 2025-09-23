@@ -3,8 +3,8 @@ name: Fetch 1365 data
 on:
   workflow_dispatch:
   schedule:
-    # KST 00/04/08/12/16/20  →  UTC 15/19/23/03/07/11
-    - cron: "0 3,7,11,15,19,23 * * *"
+    # Run hourly only between 08:00–23:00 KST (UTC 23:00–14:00)
+    - cron: "0 23,0-14 * * *"
 
 
 jobs:

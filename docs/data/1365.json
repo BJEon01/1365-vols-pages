@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2025-09-22T23:18:33.877Z",
+  "updatedAt": "2025-09-23T03:31:49.654Z",
   "params": {
     "USE_NOTICE_RANGE": false,
-    "NOTICE_BG": "20250922",
-    "NOTICE_ED": "20251022",
+    "NOTICE_BG": "20250923",
+    "NOTICE_ED": "20251023",
     "OFFSET_BG": 0,
     "OFFSET_ED": 30,
     "SIDO_NAME": "",
@@ -22,14 +22,14 @@
   },
   "stat": {
     "total": 2010,
-    "triedDetail": 138,
+    "triedDetail": 0,
     "recruit": {
-      "fromApi": 1893,
-      "fromDetail": 117,
+      "fromApi": 2010,
+      "fromDetail": 0,
       "stillEmpty": 0
     },
     "applied": {
-      "fromDetail": 138,
+      "fromDetail": 0,
       "stillEmpty": 0
     }
   },

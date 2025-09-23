@@ -3,8 +3,9 @@ name: Fetch 1365 data
 on:
   workflow_dispatch:
   schedule:
-    # Run hourly only between 08:00–23:00 KST (UTC 23:00–14:00)
-    - cron: "0 23,0-14 * * *"
+    # KST 08:00–00:00 (UTC 23:00–15:00) 매 시간 실행
+    - cron: "0 23,0-15 * * *"
+
 
 
 jobs:

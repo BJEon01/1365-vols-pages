@@ -1,6 +1,6 @@
 // Node 18+ / ESM
 // 서울 25개 구로 샤딩해 처음부터 서울 결과를 많이 모으는 버전
-// + 상세페이지에서 "모집인원"과 "신청인원"을 함께 추출해 보강
+// + 상세페이지에서 "모집인원"과 "신청인원"을 함께 추출 (신청인원은 매번 갱신)
 
 import fs from "fs";
 import http from "http";
@@ -95,8 +95,6 @@ function extractCountByLabels(html, labels) {
   const s = String(html);
 
   for (const label of labels) {
-    const labelRe = new RegExp(label, "i");
-
     // 1) <dt>라벨</dt> 다음 <dd>
     let m = s.match(new RegExp(`<dt[^>]*>\\s*(?:${label})\\s*<\\/dt>[\\s\\S]{0,200}?(<dd[^>]*>[\\s\\S]*?<\\/dd>)`, "i"));
     if (m) {
@@ -203,22 +201,25 @@ try { cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8")); } catch { cache 
 // 구 캐시 호환 + 읽기/쓰기 헬퍼
 function readCache(pid) {
   const c = cache[pid];
-  if (!c) return { recruit: "", applied: "" };
-  if (typeof c === "string") return { recruit: c, applied: "" };            // 최구버전
-  if (c && typeof c === "object") {
-    return {
-      recruit: c.recruit ?? c.value ?? "",
-      applied: c.applied ?? c.aplyNmpr ?? ""
-    };
-  }
-  return { recruit: "", applied: "" };
-}
-function writeCache(pid, recruit, applied) {
-  cache[pid] = {
-    recruit: recruit || "",
-    applied: applied || "",
-    fetchedAt: new Date().toISOString()
+  if (!c) return { recruit: "", applied: "", appliedFetchedAt: null };
+  if (typeof c === "string") return { recruit: c, applied: "", appliedFetchedAt: null }; // 최구버전 호환
+  return {
+    recruit: c.recruit ?? c.value ?? "",
+    applied: c.applied ?? c.aplyNmpr ?? "",
+    appliedFetchedAt: c.appliedFetchedAt ?? c.fetchedAt ?? null, // 구버전 호환
   };
+}
+function writeCache(pid, { recruit, applied, touchedApplied=false }) {
+  const prev = cache[pid] || {};
+  const now = new Date().toISOString();
+  const next = {
+    ...prev,
+    recruit: recruit ?? prev.recruit ?? "",
+    applied: applied ?? prev.applied ?? "",
+    fetchedAt: now,
+  };
+  if (touchedApplied) next.appliedFetchedAt = now;
+  cache[pid] = next;
 }
 
 // ====== 한 번의 리스트 호출 (키워드 추가 인자 지원) ======
@@ -278,7 +279,7 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
         noticeBgnde:    it.noticeBgnde ?? "",
         noticeEndde:    it.noticeEndde ?? "",
         rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
-        // NEW: 신청인원은 API에 없어서 상세에서 채움
+        // 신청인원은 항상 상세에서 최신으로 덮어쓸 것
         aplyNmpr:       "",
         mnnstNm:        it.mnnstNm ?? "",
         nanmmbyNm:      it.nanmmbyNm ?? "",
@@ -328,8 +329,8 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
     collected = await fetchListOnce();
   }
 
-  // ====== 상세 보강(모집/신청 인원) ======
-  // 캐시 반영(있으면 즉시 넣고, 없거나 부족하면 상세 fetch)
+  // ====== 상세 보강 ======
+  // 캐시 반영: 모집인원만(비었을 때) 캐시로 메우기. 신청인원은 항상 상세로 덮어쓸 예정이라 캐시 미사용.
   let filledApiRecruit = 0;
   let filledDetailRecruit = 0;
   let filledDetailApplied = 0;
@@ -340,25 +341,33 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   for (const it of collected) {
     const c = readCache(it.progrmRegistNo);
     if (!it.rcritNmpr && c.recruit) it.rcritNmpr = c.recruit;
-    if (!it.aplyNmpr && c.applied) it.aplyNmpr = c.applied;
     if (it.rcritNmpr) filledApiRecruit++;
+    // aplyNmpr는 캐시 선적용하지 않음(항상 상세로 갱신)
   }
 
-  const needDetail = collected.filter(it => (!it.rcritNmpr || !it.aplyNmpr)).slice(0, MAX_DETAIL);
+  // 항상 상세조회해서 신청인원 갱신 (MAX_DETAIL 한도 내)
+  const needDetail = collected.slice(0, MAX_DETAIL);
 
-  const limiter = pLimit(DETAIL_CONCURRENCY);
-  await Promise.all(needDetail.map(it => limiter(async () => {
+  await Promise.all(needDetail.map(it => limit(async () => {
     if (DETAIL_DELAY_MS) await new Promise(r=>setTimeout(r, DETAIL_DELAY_MS));
     triedDetail++;
     const { recruit, applied } = await fetchDetailCounts(it.progrmRegistNo);
 
+    // 모집인원: API가 비어있을 때만 상세로 보강
     if (recruit && !it.rcritNmpr) { it.rcritNmpr = recruit; filledDetailRecruit++; }
-    if (applied)                 { it.aplyNmpr  = applied; filledDetailApplied++; }
+
+    // 신청인원: 항상 상세 결과로 갱신(값 있으면 덮어씀)
+    if (applied) { it.aplyNmpr = applied; filledDetailApplied++; }
 
     if (!it.rcritNmpr) stillEmptyRecruit++;
     if (!it.aplyNmpr)  stillEmptyApplied++;
 
-    writeCache(it.progrmRegistNo, it.rcritNmpr || recruit || "", it.aplyNmpr || applied || "");
+    // 캐시 갱신 (신청인원은 매번 최신으로 덮어쓴 값 저장)
+    writeCache(it.progrmRegistNo, {
+      recruit: it.rcritNmpr || recruit || undefined,
+      applied: it.aplyNmpr || applied || undefined,
+      touchedApplied: !!(it.aplyNmpr || applied)
+    });
   })));
 
   // 정렬: 모집기간 종료일 오름차순
@@ -380,12 +389,13 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
       PROGRM_STTUS_SE, RECRUITING_ONLY,
       PER, MAX_PAGES, KEYWORD,
       SHARD_GUGUN, DESIRED_MIN,
-      DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL
+      DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL,
+      refreshApplied: "always" // 기록용
     },
     stat: {
       total: collected.length,
       triedDetail,
-      recruit: { fromApi: filledApiRecruit, fromDetail: filledDetailRecruit, stillEmpty: stillEmptyRecruit },
+      recruit: { fromApiOrCache: filledApiRecruit, fromDetail: filledDetailRecruit, stillEmpty: stillEmptyRecruit },
       applied: { fromDetail: filledDetailApplied, stillEmpty: stillEmptyApplied }
     },
     count: collected.length,
@@ -395,8 +405,8 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
 
   console.log(`✅ Saved docs/data/1365.json with ${collected.length} items`);
-  console.log(`   ▶ 모집인원 채움: API=${filledApiRecruit}, 상세=${filledDetailRecruit}, 미확인=${stillEmptyRecruit}`);
-  console.log(`   ▶ 신청인원 채움: 상세=${filledDetailApplied}, 미확인=${stillEmptyApplied}`);
+  console.log(`   ▶ 모집인원 채움: API/CACHE=${filledApiRecruit}, 상세=${filledDetailRecruit}, 미확인=${stillEmptyRecruit}`);
+  console.log(`   ▶ 신청인원 채움(항상 상세): 상세=${filledDetailApplied}, 미확인=${stillEmptyApplied}`);
 })().catch(e => {
   console.error(e);
   process.exit(1);

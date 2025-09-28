@@ -1,12 +1,12 @@
 // Node 18+ / ESM
 // 서울 25개 구 샤딩 수집 + 상세페이지 "모집/신청" 동시 추출
 // 안정성 보강 + "0건시 즉시 폴백" 다단 전략 + 디버그 덤프
+// ✅ 변경점: IPv4 강제는 요청 옵션 family:4 로만 처리(lookup 제거) → ERR_INVALID_IP_ADDRESS 방지
 
 import fs from "fs";
 import http from "http";
 import https from "https";
 import axios from "axios";
-import dns from "node:dns";
 import { parseStringPromise } from "xml2js";
 
 // ====== ENV ======
@@ -69,19 +69,16 @@ const TODAY_YMD = ymdKST();
 const NOTICE_BG = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_BG) : "";
 const NOTICE_ED = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_ED) : "";
 
-// ====== HTTP keep-alive + IPv4 강제 + br 제외 ======
-const lookupV4 = (hostname, opts, cb) =>
-  dns.lookup(hostname, { family: 4, all: false }, cb);
-
-const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 32, lookup: lookupV4 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, lookup: lookupV4 });
+// ====== HTTP keep-alive (lookup 제거) ======
+const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 32 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32 });
 
 const AX = axios.create({
   httpAgent,
   httpsAgent,
   proxy: false,
   timeout: AXIOS_TIMEOUT_MS,
-  // 서버가 XML 기본이 가장 안정적 → Accept를 XML로 강제
+  // 서버가 XML 기본이 가장 안정적 → Accept를 XML로 우선
   headers: {
     Accept: "application/xml,text/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
     "Accept-Language": "ko,en;q=0.8",
@@ -192,7 +189,7 @@ const DETAIL_URL = pid =>
 
 async function fetchDetailCounts(pid) {
   const { data, status } = await withRetry(
-    () => AX.get(DETAIL_URL(pid), { responseType: "text" }),
+    () => AX.get(DETAIL_URL(pid), { responseType: "text", family: 4 }),
     `detail:${pid}`
   );
   if (status >= 400) return { recruit: "", applied: "" };
@@ -264,10 +261,8 @@ function writeCache(pid, { recruit, applied, touchedApplied=false }) {
 // ====== 한 페이지 호출 ======
 async function fetchListPage({ page, paramsForLog, queryParams }) {
   const qs = new URLSearchParams({ numOfRows: String(PER), pageNo: String(page), _type: "json" });
-  // 서비스키는 대소문자 민감한 API도 있어 대문자 사용
   const urlBase = `${EP}?ServiceKey=${SERVICE_KEY}`;
 
-  // 동적 파라미터
   for (const [k, v] of Object.entries(queryParams)) {
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
   }
@@ -275,7 +270,7 @@ async function fetchListPage({ page, paramsForLog, queryParams }) {
   const url = `${urlBase}&${qs.toString()}`;
 
   const { data, headers, status } = await withRetry(
-    () => AX.get(url, { transformResponse: [d=>d] }),
+    () => AX.get(url, { transformResponse: [d=>d], family: 4 }),
     `list:${paramsForLog}:p${page}`
   );
 
@@ -292,18 +287,10 @@ async function fetchListPage({ page, paramsForLog, queryParams }) {
 }
 
 // ====== 전략별 한 샤드 수집 (다단 폴백) ======
-/**
- * strategies 배열의 각 항목은 queryParams를 리턴하는 함수
- *  - A: sido + status + keyword
- *  - B: sido + status
- *  - C: sido only
- *  - D: keyword only
- *  - E: no filter
- */
 function buildStrategies(guKeyword) {
   const strategies = [];
 
-  // A
+  // A: sido + status + keyword
   strategies.push(() => ({
     name: `A_sido+status+kw(${guKeyword || "-"})`,
     params: {
@@ -314,7 +301,7 @@ function buildStrategies(guKeyword) {
     }
   }));
 
-  // B
+  // B: sido + status
   strategies.push(() => ({
     name: "B_sido+status",
     params: {
@@ -324,7 +311,7 @@ function buildStrategies(guKeyword) {
     }
   }));
 
-  // C
+  // C: sido only
   strategies.push(() => ({
     name: "C_sido_only",
     params: {
@@ -333,7 +320,7 @@ function buildStrategies(guKeyword) {
     }
   }));
 
-  // D
+  // D: keyword only
   strategies.push(() => ({
     name: `D_kw_only(${guKeyword || "-"})`,
     params: {
@@ -342,7 +329,7 @@ function buildStrategies(guKeyword) {
     }
   }));
 
-  // E
+  // E: no filter
   strategies.push(() => ({
     name: "E_no_filter",
     params: {
@@ -360,7 +347,6 @@ async function collectWithStrategies(guKeyword = "") {
   for (const make of strategies) {
     const { name, params } = make();
 
-    // 페이지 루프
     out = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
       const { items, total, raw } = await fetchListPage({
@@ -370,18 +356,15 @@ async function collectWithStrategies(guKeyword = "") {
       });
 
       if (page === 1 && items.length === 0) {
-        // 1페이지 0건이면 원문 덤프(분석용)
         debugDump(`page1_zero_${name}.xml`, raw);
       }
 
       // 로컬 필터링
       for (const it of items) {
-        // KST 기준 오늘 포함 모집기간만
         if (RECRUITING_ONLY) {
           const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
           if (!(isYmd(nb) && isYmd(ne) && between(TODAY_YMD, nb, ne))) continue;
         }
-        // 서울 강제 필터 (과도시 완화)
         if (SIDO_CODE === "6110000" && STRICT_REGION_FILTER) {
           const pool = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
           const hints = SIDO_NAME ? [SIDO_NAME] : (SIDO_TEXT_HINT["6110000"] || []);
@@ -424,7 +407,7 @@ async function collectWithStrategies(guKeyword = "") {
     }
   }
 
-  return out; // 전부 실패 시 []
+  return out;
 }
 
 // ====== 상세 ======
@@ -436,7 +419,6 @@ async function enrichDetails(collected) {
   let stillEmptyApplied = 0;
   let triedDetail = 0;
 
-  // 캐시에서 모집인원만 선적용
   for (const it of collected) {
     const c = readCache(it.progrmRegistNo);
     if (!it.rcritNmpr && c.recruit) it.rcritNmpr = c.recruit;
@@ -479,7 +461,6 @@ async function enrichDetails(collected) {
 
   let collected = [];
 
-  // 1) 서울 25개 구: 각 구에 대해 다단 폴백을 적용
   if (SHARD_GUGUN && SIDO_CODE === "6110000") {
     const shards = SEOUL_GUGUN.map(gu => listLimit(async () => {
       const part = await collectWithStrategies(gu);
@@ -489,7 +470,6 @@ async function enrichDetails(collected) {
     const results = await Promise.all(shards);
     collected = uniqBy(results.flat(), it => it.progrmRegistNo);
 
-    // 구 샤딩 전체가 0이면 필터 완화 후 재시도(한 번만)
     if (collected.length === 0) {
       console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false 로 완화 후 재시도");
       STRICT_REGION_FILTER = false;
@@ -499,13 +479,11 @@ async function enrichDetails(collected) {
       collected = uniqBy(results2.flat(), it => it.progrmRegistNo);
     }
 
-    // 그래도 적으면 SIDO Only 한 번 더
     if (collected.length === 0) {
       console.warn("[fallback] keyword 없이 SIDO 전체 재수집");
       collected = await collectWithStrategies("");
     }
   } else {
-    // 샤딩 비활성화
     collected = await collectWithStrategies(KEYWORD);
     if (collected.length === 0) {
       console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false 로 완화 후 재시도");

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2025-09-28T06:52:43.941Z",
+  "updatedAt": "2025-09-28T07:01:07.820Z",
   "params": {
     "USE_NOTICE_RANGE": false,
-    "NOTICE_BG": "20250928",
-    "NOTICE_ED": "20251028",
+    "NOTICE_BG": "",
+    "NOTICE_ED": "",
     "OFFSET_BG": 0,
     "OFFSET_ED": 30,
     "SIDO_NAME": "",
@@ -16,11 +16,13 @@
     "KEYWORD": "",
     "SHARD_GUGUN": true,
     "DESIRED_MIN": 5000,
-    "LIST_CONCURRENCY": 6,
+    "LIST_CONCURRENCY": 1,
+    "LIST_PAGE_DELAY_MS": 350,
     "DETAIL_CONCURRENCY": 16,
     "DETAIL_DELAY_MS": 0,
     "MAX_DETAIL": 999999,
     "AXIOS_TIMEOUT_MS": 45000,
+    "STRICT_REGION_FILTER": false,
     "refreshApplied": "always"
   },
   "stat": {

@@ -1,11 +1,13 @@
 // Node 18+ / ESM
 // 서울 25개 구로 샤딩해 처음부터 서울 결과를 많이 모으는 버전
 // + 상세페이지에서 "모집인원"과 "신청인원"을 함께 추출 (신청인원은 매번 갱신)
+// + 안정성 보강: IPv4 강제, br 비활성, 타임아웃 상향, 지수백오프 재시도, 리스트/상세 동시성 제어
 
 import fs from "fs";
 import http from "http";
 import https from "https";
 import axios from "axios";
+import dns from "node:dns";
 import { parseStringPromise } from "xml2js";
 
 // ====== ENV ======
@@ -29,12 +31,14 @@ const KEYWORD    = (process.env.KEYWORD || "").trim();
 
 // 서울 구 단위 샤딩
 const SHARD_GUGUN = (process.env.SHARD_GUGUN ?? "true") === "true";
-const DESIRED_MIN = Number(process.env.DESIRED_MIN || 5000); // 서울 결과를 이정도 모으면 조기종료
+const DESIRED_MIN = Number(process.env.DESIRED_MIN || 5000); // 서울 결과를 이정도 모으면 조기종료(참고치)
 
-// 상세 병렬
+// 동시성/타임아웃
 const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
+const LIST_CONCURRENCY   = Number(process.env.LIST_CONCURRENCY || 6);
+const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 45000);
 
 // ====== CONSTS ======
 const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
@@ -47,15 +51,52 @@ const addDays = (dt, n) => { const t = new Date(dt); t.setDate(t.getDate()+n); r
 const NOTICE_BG = ymd(addDays(today, OFFSET_BG));
 const NOTICE_ED = ymd(addDays(today, OFFSET_ED));
 
-// ====== HTTP keep-alive ======
-const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 128 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128 });
+// ====== HTTP keep-alive + IPv4 강제 + br 제외 ======
+const lookupV4 = (hostname, opts, cb) =>
+  dns.lookup(hostname, { family: 4, all: false }, cb);
+
+const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 64, lookup: lookupV4 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, lookup: lookupV4 });
+
 const AX = axios.create({
-  httpAgent, httpsAgent,
-  headers: { "Accept-Language":"ko,en;q=0.8", "User-Agent":"Mozilla/5.0" },
-  timeout: 15000,
-  validateStatus: s => s >= 200 && s < 500
+  httpAgent,
+  httpsAgent,
+  proxy: false,
+  timeout: AXIOS_TIMEOUT_MS,
+  headers: {
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "ko,en;q=0.8",
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Encoding": "gzip, deflate", // br 제외
+  },
+  transitional: { clarifyTimeoutError: true },
+  validateStatus: (s) => s >= 200 && s < 500, // 5xx는 throw → 재시도 대상
 });
+
+// ====== 재시도(지수백오프+지터) ======
+async function withRetry(doReq, name = "request", retries = 5) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await doReq();
+    } catch (e) {
+      const status = e.response?.status;
+      const code = e.code;
+      const retriable =
+        ["ECONNABORTED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND"].includes(code) ||
+        status === 429 ||
+        (status >= 500 && status <= 599);
+
+      if (!retriable || attempt >= retries) throw e;
+
+      attempt++;
+      const base = 500 * 2 ** (attempt - 1); // 0.5s, 1s, 2s, 4s, 8s...
+      const delay = Math.min(5000, base) * (0.7 + Math.random() * 0.6); // 지터
+      console.warn(`[retry ${attempt}/${retries}] ${name}: ${code || status} → wait ${Math.round(delay)}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
 
 // ====== 지역 힌트 ======
 const SIDO_TEXT_HINT = {
@@ -150,7 +191,10 @@ const DETAIL_URL = pid =>
   `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(pid)}`;
 
 async function fetchDetailCounts(pid) {
-  const { data, status } = await AX.get(DETAIL_URL(pid), { responseType: "text" });
+  const { data, status } = await withRetry(
+    () => AX.get(DETAIL_URL(pid), { responseType: "text" }),
+    `detail:${pid}`
+  );
   if (status >= 400) return { recruit: "", applied: "" };
   return extractCounts(data);
 }
@@ -183,7 +227,7 @@ async function parseBody(data, headers){
 }
 
 // 간단 동시성 리미터
-function pLimit(n){
+function createPLimit(n){
   let active = 0, q = [];
   const next = () => { if (q.length && active < n) { active++; q.shift()(); } };
   return fn => new Promise((res, rej) => {
@@ -191,7 +235,8 @@ function pLimit(n){
     q.push(run); next();
   });
 }
-const limit = pLimit(DETAIL_CONCURRENCY);
+const detailLimit = createPLimit(DETAIL_CONCURRENCY);
+const listLimit   = createPLimit(LIST_CONCURRENCY);
 
 // ====== 캐시 ======
 const CACHE_PATH = "docs/data/recruit_cache.json";
@@ -202,7 +247,7 @@ try { cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8")); } catch { cache 
 function readCache(pid) {
   const c = cache[pid];
   if (!c) return { recruit: "", applied: "", appliedFetchedAt: null };
-  if (typeof c === "string") return { recruit: c, applied: "", appliedFetchedAt: null }; // 최구버전 호환
+  if (typeof c === "string") return { recruit: c, applied: "", appliedFetchedAt: null }; // 구버전 호환
   return {
     recruit: c.recruit ?? c.value ?? "",
     applied: c.applied ?? c.aplyNmpr ?? "",
@@ -243,7 +288,11 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
     if (PROGRM_STTUS_SE) qs.set("progrmSttusSe", PROGRM_STTUS_SE);
 
     const url = `${EP}?serviceKey=${SERVICE_KEY}&${qs.toString()}`;
-    const { data, headers, status } = await AX.get(url, { transformResponse: [d=>d] });
+    const { data, headers, status } = await withRetry(
+      () => AX.get(url, { transformResponse: [d=>d] }),
+      `list:${kwAll || "base"}:p${page}`
+    );
+
     if (status >= 400) throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
 
     const body  = await parseBody(data, headers);
@@ -297,36 +346,49 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   return out;
 }
 
+// 안정성: 리스트 호출 안전 래퍼(실패 시 빈 배열 반환)
+async function safeFetchListOnce(args) {
+  try {
+    return await fetchListOnce(args);
+  } catch (e) {
+    console.warn(`[warn] list fetch skipped: ${e.code || e.message}`);
+    return [];
+  }
+}
+
 // ====== 메인 수집 ======
 (async () => {
   console.log("▶ params", {
     USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
     SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE,
     RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES,
-    SHARD_GUGUN, DESIRED_MIN
+    SHARD_GUGUN, DESIRED_MIN,
+    LIST_CONCURRENCY, DETAIL_CONCURRENCY, AXIOS_TIMEOUT_MS
   });
 
   let collected = [];
 
   if (SHARD_GUGUN && SIDO_CODE === "6110000") {
-    // 서울 25개 구로 샤딩해서 수집
-    for (const gu of SEOUL_GUGUN) {
-      const part = await fetchListOnce({ extraKeyword: gu });
-      collected = collected.concat(part);
-      // 전체 dedup
-      collected = uniqBy(collected, it => it.progrmRegistNo);
-      console.log(`  └ ${gu} 누적=${collected.length}`);
+    // 서울 25개 구를 제한 동시성으로 병렬 수집
+    const tasks = SEOUL_GUGUN.map((gu) =>
+      listLimit(async () => {
+        const part = await safeFetchListOnce({ extraKeyword: gu });
+        console.log(`  └ ${gu} 수집=${part.length}`);
+        return { gu, part };
+      })
+    );
+    const results = await Promise.all(tasks);
+    for (const { part } of results) collected = collected.concat(part);
+    collected = uniqBy(collected, it => it.progrmRegistNo);
 
-      if (collected.length >= DESIRED_MIN) break; // 충분히 모이면 샤딩 루프도 중단
-    }
     // 보너스: 샤딩 후에도 부족하면 기본(키워드 없음)으로 한 번 더
     if (collected.length < DESIRED_MIN) {
-      const part = await fetchListOnce({ extraKeyword: "" });
+      const part = await safeFetchListOnce({ extraKeyword: "" });
       collected = uniqBy(collected.concat(part), it => it.progrmRegistNo);
     }
   } else {
     // 샤딩 비활성화: 단일 쿼리만
-    collected = await fetchListOnce();
+    collected = await safeFetchListOnce();
   }
 
   // ====== 상세 보강 ======
@@ -348,7 +410,7 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   // 항상 상세조회해서 신청인원 갱신 (MAX_DETAIL 한도 내)
   const needDetail = collected.slice(0, MAX_DETAIL);
 
-  await Promise.all(needDetail.map(it => limit(async () => {
+  await Promise.all(needDetail.map(it => detailLimit(async () => {
     if (DETAIL_DELAY_MS) await new Promise(r=>setTimeout(r, DETAIL_DELAY_MS));
     triedDetail++;
     const { recruit, applied } = await fetchDetailCounts(it.progrmRegistNo);
@@ -389,7 +451,9 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
       PROGRM_STTUS_SE, RECRUITING_ONLY,
       PER, MAX_PAGES, KEYWORD,
       SHARD_GUGUN, DESIRED_MIN,
+      LIST_CONCURRENCY,
       DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL,
+      AXIOS_TIMEOUT_MS,
       refreshApplied: "always" // 기록용
     },
     stat: {

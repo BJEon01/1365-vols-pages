@@ -1,6 +1,6 @@
 // Node 18+ / ESM
 // 서울 25개 구 샤딩 수집 + 상세페이지 "모집/신청" 동시 추출
-// 안정성 보강: IPv4 강제, br 비활성, 지수백오프 재시도, 직렬 리스트+페이지 지연, KST필터, 단계적 fallback
+// 안정성 보강 + "0건시 즉시 폴백" 다단 전략 + 디버그 덤프
 
 import fs from "fs";
 import http from "http";
@@ -36,11 +36,11 @@ const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
-const LIST_CONCURRENCY   = Number(process.env.LIST_CONCURRENCY || 1);      // ⬅ 기본 직렬
-const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350);  // ⬅ 페이지 간 지연
+const LIST_CONCURRENCY   = Number(process.env.LIST_CONCURRENCY || 1);      // 기본 직렬
+const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350);  // 페이지 간 지연
 const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 45000);
 
-// 지역 필터 강도
+// 지역 필터 강도 (초기 true 이지만 0건이면 자동 완화)
 let   STRICT_REGION_FILTER = (process.env.STRICT_REGION_FILTER ?? "true") === "true";
 
 // ====== CONSTS ======
@@ -56,23 +56,18 @@ function ymdKST(date = new Date()) {
     });
     return f.format(date).replace(/-/g, "");
   } catch {
-    // fallback: UTC+9 보정
     const d = new Date(Date.now() + 9 * 3600 * 1000);
     return d.toISOString().slice(0, 10).replace(/-/g, "");
   }
 }
-function addDaysKST(days) {
-  // KST 기준 yyyymmdd를 날짜로 취급해 days 가감 후 다시 KST yyyymmdd
-  const t = ymdKST();
-  const y = Number(t.slice(0,4)), m = Number(t.slice(4,6)), d = Number(t.slice(6,8));
-  // KST 자정 시각을 만들기 어렵기 때문에 UTC 기준으로 하루를 밀도 있게 가감
-  const base = Date.UTC(y, m - 1, d, 15); // 15:00 UTC = 00:00+09:00 KST 근처
-  const dt = new Date(base + days * 24 * 3600 * 1000);
+function addDaysKST(baseYmd, days) {
+  const y = Number(baseYmd.slice(0,4)), m = Number(baseYmd.slice(4,6)), d = Number(baseYmd.slice(6,8));
+  const dt = new Date(Date.UTC(y, m - 1, d, 15) + days * 86400000); // 15:00 UTC ≈ 00:00 KST
   return ymdKST(dt);
 }
-const TODAY_YMD  = ymdKST();
-const NOTICE_BG  = USE_NOTICE_RANGE ? addDaysKST(OFFSET_BG) : "";
-const NOTICE_ED  = USE_NOTICE_RANGE ? addDaysKST(OFFSET_ED) : "";
+const TODAY_YMD = ymdKST();
+const NOTICE_BG = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_BG) : "";
+const NOTICE_ED = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_ED) : "";
 
 // ====== HTTP keep-alive + IPv4 강제 + br 제외 ======
 const lookupV4 = (hostname, opts, cb) =>
@@ -86,8 +81,9 @@ const AX = axios.create({
   httpsAgent,
   proxy: false,
   timeout: AXIOS_TIMEOUT_MS,
+  // 서버가 XML 기본이 가장 안정적 → Accept를 XML로 강제
   headers: {
-    Accept: "application/json, text/plain, */*",
+    Accept: "application/xml,text/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
     "Accept-Language": "ko,en;q=0.8",
     "User-Agent": "Mozilla/5.0",
     "Accept-Encoding": "gzip, deflate", // br 제외
@@ -113,7 +109,7 @@ async function withRetry(doReq, name = "request", retries = 5) {
 
       attempt++;
       const base = 500 * 2 ** (attempt - 1);
-      const delay = Math.min(5000, base) * (0.7 + Math.random() * 0.6);
+      const delay = Math.min(6000, base) * (0.7 + Math.random() * 0.6);
       console.warn(`[retry ${attempt}/${retries}] ${name}: ${code || status} → wait ${Math.round(delay)}ms`);
       await new Promise((r) => setTimeout(r, delay));
     }
@@ -154,6 +150,16 @@ function createPLimit(n){
 const detailLimit = createPLimit(DETAIL_CONCURRENCY);
 const listLimit   = createPLimit(LIST_CONCURRENCY);
 
+// ====== 디버그 덤프 ======
+function debugDump(name, payload) {
+  try {
+    fs.mkdirSync("docs/debug", { recursive: true });
+    const p = `docs/debug/${name}`;
+    fs.writeFileSync(p, typeof payload === "string" ? payload : String(payload), "utf-8");
+    console.warn(`[debug] dumped → ${p}`);
+  } catch {}
+}
+
 // ====== 숫자 추출 / 상세 파서 ======
 const pickNumber = (txt) => {
   const m = String(txt).match(/([0-9][0-9,]*)\s*명/i);
@@ -193,11 +199,12 @@ async function fetchDetailCounts(pid) {
   return extractCounts(data);
 }
 
-// ====== 본문 파서 ======
+// ====== 본문 파서(XML/JSON) ======
 async function parseBody(data, headers){
   const ct = String(headers["content-type"] || "").toLowerCase();
   const s  = typeof data === "string" ? data.trim() : "";
 
+  // JSON
   if (ct.includes("application/json") || s.startsWith("{")) {
     const j = typeof data === "string" ? JSON.parse(s) : data;
     const header = j?.response?.header;
@@ -208,7 +215,9 @@ async function parseBody(data, headers){
     if (!body) throw new Error(`Unexpected JSON: ${s.slice(0,200)}`);
     return body;
   }
-  if (s.startsWith("<")) {
+
+  // XML
+  if (s.startsWith("<") || ct.includes("xml")) {
     const j = await parseStringPromise(s, { explicitArray: false });
     const header = j?.response?.header;
     if (header && header.resultCode && header.resultCode !== "00") {
@@ -218,6 +227,9 @@ async function parseBody(data, headers){
     if (!body) throw new Error(`Unexpected XML: ${s.slice(0,200)}`);
     return body;
   }
+
+  // 알 수 없는 응답 → 덤프
+  debugDump("unknown_body.txt", s);
   throw new Error(`Unknown response: ${s.slice(0,200)}`);
 }
 
@@ -249,159 +261,174 @@ function writeCache(pid, { recruit, applied, touchedApplied=false }) {
   cache[pid] = next;
 }
 
-// ====== 리스트 호출 ======
-async function fetchListPage({ page, extraKeyword }) {
+// ====== 한 페이지 호출 ======
+async function fetchListPage({ page, paramsForLog, queryParams }) {
   const qs = new URLSearchParams({ numOfRows: String(PER), pageNo: String(page), _type: "json" });
-  if (USE_NOTICE_RANGE) { qs.set("noticeBgnde", NOTICE_BG); qs.set("noticeEndde", NOTICE_ED); }
-  const kwAll = [KEYWORD, extraKeyword].filter(Boolean).join(" ").trim();
-  if (kwAll) qs.set("keyword", kwAll);
-  if (SIDO_CODE) qs.set("sidoCd", SIDO_CODE);
-  if (GUGUN_CODE) qs.set("gugunCd", GUGUN_CODE);
-  if (PROGRM_STTUS_SE) qs.set("progrmSttusSe", PROGRM_STTUS_SE);
+  // 서비스키는 대소문자 민감한 API도 있어 대문자 사용
+  const urlBase = `${EP}?ServiceKey=${SERVICE_KEY}`;
 
-  const url = `${EP}?serviceKey=${SERVICE_KEY}&${qs.toString()}`;
+  // 동적 파라미터
+  for (const [k, v] of Object.entries(queryParams)) {
+    if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+  }
+
+  const url = `${urlBase}&${qs.toString()}`;
+
   const { data, headers, status } = await withRetry(
     () => AX.get(url, { transformResponse: [d=>d] }),
-    `list:${kwAll || "base"}:p${page}`
+    `list:${paramsForLog}:p${page}`
   );
-  if (status >= 400) throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
+
+  if (status >= 400) {
+    debugDump(`list_${paramsForLog}_p${page}.txt`, typeof data === "string" ? data : JSON.stringify(data));
+    throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
+  }
+
   const body  = await parseBody(data, headers);
   const items = toArray(body?.items?.item);
   const total = Number(body?.totalCount || 0);
-  return { items, total };
+
+  return { items, total, raw: typeof data === "string" ? data : JSON.stringify(data) };
 }
 
-async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" } = {}, opts = {}) {
-  const out = [];
-  for (let page = pageStart; page <= pageStop; page++) {
-    const { items, total } = await fetchListPage({ page, extraKeyword });
-    console.log(`page=${page} total=${total} pageItems=${items.length} kw="${extraKeyword}"`);
+// ====== 전략별 한 샤드 수집 (다단 폴백) ======
+/**
+ * strategies 배열의 각 항목은 queryParams를 리턴하는 함수
+ *  - A: sido + status + keyword
+ *  - B: sido + status
+ *  - C: sido only
+ *  - D: keyword only
+ *  - E: no filter
+ */
+function buildStrategies(guKeyword) {
+  const strategies = [];
 
-    if (!items.length) {
-      // 페이지 1에서 0 item이면 서버의 일시적 zero-bug 가능 → 살짝 대기 후 1회 재시도
-      if (page === 1) {
-        await new Promise(r => setTimeout(r, 500));
-        const retry = await fetchListPage({ page, extraKeyword });
-        if (retry.items.length === 0) break;
-        else { items.splice(0, items.length, ...retry.items); }
-      } else {
-        break;
-      }
+  // A
+  strategies.push(() => ({
+    name: `A_sido+status+kw(${guKeyword || "-"})`,
+    params: {
+      keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(),
+      sidoCd: SIDO_CODE,
+      progrmSttusSe: PROGRM_STTUS_SE,
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
     }
+  }));
 
-    for (const it of items) {
-      // KST 기준 오늘 포함 모집기간만
-      if (RECRUITING_ONLY) {
-        const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
-        if (!(isYmd(nb) && isYmd(ne) && between(TODAY_YMD, nb, ne))) continue;
-      }
+  // B
+  strategies.push(() => ({
+    name: "B_sido+status",
+    params: {
+      sidoCd: SIDO_CODE,
+      progrmSttusSe: PROGRM_STTUS_SE,
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
+    }
+  }));
 
-      // 지역 강제 필터 (API가 무시하는 경우 대비)
-      if (SIDO_CODE === "6110000" && STRICT_REGION_FILTER) {
-        const pool = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
-        const hints = SIDO_NAME ? [SIDO_NAME] : (SIDO_TEXT_HINT["6110000"] || []);
-        const apiSido = (it.sidoCd ?? "").toString();
-        if (apiSido !== "6110000" && !includesAny(pool, hints)) continue;
-      }
+  // C
+  strategies.push(() => ({
+    name: "C_sido_only",
+    params: {
+      sidoCd: SIDO_CODE,
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
+    }
+  }));
 
-      out.push({
-        progrmRegistNo: it.progrmRegistNo ?? "",
-        progrmSj:       it.progrmSj ?? "",
-        progrmBgnde:    it.progrmBgnde ?? "",
-        progrmEndde:    it.progrmEndde ?? "",
-        noticeBgnde:    it.noticeBgnde ?? "",
-        noticeEndde:    it.noticeEndde ?? "",
-        rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
-        aplyNmpr:       "", // 상세에서 갱신
-        mnnstNm:        it.mnnstNm ?? "",
-        nanmmbyNm:      it.nanmmbyNm ?? "",
-        actPlace:       it.actPlace ?? "",
-        actBeginTm:     (it.actBeginTm ?? "").toString().trim(),
-        actEndTm:       (it.actEndTm ?? "").toString().trim(),
-        actBeginMnt:    (it.actBeginMnt ?? "").toString().trim(),
-        actEndMnt:      (it.actEndMnt ?? "").toString().trim(),
-        sidoCd:         (it.sidoCd ?? "").toString().trim(),
+  // D
+  strategies.push(() => ({
+    name: `D_kw_only(${guKeyword || "-"})`,
+    params: {
+      keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(),
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
+    }
+  }));
+
+  // E
+  strategies.push(() => ({
+    name: "E_no_filter",
+    params: {
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
+    }
+  }));
+
+  return strategies;
+}
+
+async function collectWithStrategies(guKeyword = "") {
+  const strategies = buildStrategies(guKeyword);
+  let out = [];
+
+  for (const make of strategies) {
+    const { name, params } = make();
+
+    // 페이지 루프
+    out = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { items, total, raw } = await fetchListPage({
+        page,
+        paramsForLog: name,
+        queryParams: params
       });
+
+      if (page === 1 && items.length === 0) {
+        // 1페이지 0건이면 원문 덤프(분석용)
+        debugDump(`page1_zero_${name}.xml`, raw);
+      }
+
+      // 로컬 필터링
+      for (const it of items) {
+        // KST 기준 오늘 포함 모집기간만
+        if (RECRUITING_ONLY) {
+          const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
+          if (!(isYmd(nb) && isYmd(ne) && between(TODAY_YMD, nb, ne))) continue;
+        }
+        // 서울 강제 필터 (과도시 완화)
+        if (SIDO_CODE === "6110000" && STRICT_REGION_FILTER) {
+          const pool = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
+          const hints = SIDO_NAME ? [SIDO_NAME] : (SIDO_TEXT_HINT["6110000"] || []);
+          const apiSido = (it.sidoCd ?? "").toString();
+          if (apiSido !== "6110000" && !includesAny(pool, hints)) continue;
+        }
+
+        out.push({
+          progrmRegistNo: it.progrmRegistNo ?? "",
+          progrmSj:       it.progrmSj ?? "",
+          progrmBgnde:    it.progrmBgnde ?? "",
+          progrmEndde:    it.progrmEndde ?? "",
+          noticeBgnde:    it.noticeBgnde ?? "",
+          noticeEndde:    it.noticeEndde ?? "",
+          rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
+          aplyNmpr:       "",
+          mnnstNm:        it.mnnstNm ?? "",
+          nanmmbyNm:      it.nanmmbyNm ?? "",
+          actPlace:       it.actPlace ?? "",
+          actBeginTm:     (it.actBeginTm ?? "").toString().trim(),
+          actEndTm:       (it.actEndTm ?? "").toString().trim(),
+          actBeginMnt:    (it.actBeginMnt ?? "").toString().trim(),
+          actEndMnt:      (it.actEndMnt ?? "").toString().trim(),
+          sidoCd:         (it.sidoCd ?? "").toString().trim(),
+        });
+      }
+
+      console.log(`[${name}] page=${page} total=${total} pageItems=${items.length} kept=${out.length}`);
+
+      if (LIST_PAGE_DELAY_MS) await new Promise(r => setTimeout(r, LIST_PAGE_DELAY_MS));
+
+      if (items.length === 0 || out.length >= DESIRED_MIN) break;
     }
 
-    if (LIST_PAGE_DELAY_MS) await new Promise(r => setTimeout(r, LIST_PAGE_DELAY_MS));
-    if (out.length >= DESIRED_MIN) break;
+    if (out.length > 0) {
+      console.log(`[${name}] → collected ${out.length} items`);
+      return out;
+    } else {
+      console.warn(`[${name}] 0 items → try next strategy`);
+    }
   }
-  return out;
+
+  return out; // 전부 실패 시 []
 }
 
-// 안전 래퍼
-async function safeFetchListOnce(args, tag) {
-  try { return await fetchListOnce(args); }
-  catch (e) { console.warn(`[warn] list fetch skipped(${tag}): ${e.code || e.message}`); return []; }
-}
-
-// ====== 메인 ======
-(async () => {
-  console.log("▶ params", {
-    USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
-    SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE,
-    RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES,
-    SHARD_GUGUN, DESIRED_MIN,
-    LIST_CONCURRENCY, LIST_PAGE_DELAY_MS,
-    DETAIL_CONCURRENCY, AXIOS_TIMEOUT_MS,
-    STRICT_REGION_FILTER
-  });
-
-  let collected = [];
-
-  // 1) 기본: 서울 25개 구 직렬/저동시성 샤딩
-  if (SHARD_GUGUN && SIDO_CODE === "6110000") {
-    const tasks = SEOUL_GUGUN.map((gu) =>
-      listLimit(async () => {
-        const part = await safeFetchListOnce({ extraKeyword: gu }, gu);
-        console.log(`  └ ${gu} 수집=${part.length}`);
-        return part;
-      })
-    );
-    const results = await Promise.all(tasks);
-    collected = uniqBy(results.flat(), it => it.progrmRegistNo);
-  } else {
-    collected = await safeFetchListOnce({}, "base");
-  }
-
-  // 2) Fallback 단계적 완화
-  if (collected.length === 0) {
-    console.warn("[fallback] STRICT_REGION_FILTER → false");
-    STRICT_REGION_FILTER = false;
-    if (SHARD_GUGUN && SIDO_CODE === "6110000") {
-      let tmp = [];
-      for (const gu of SEOUL_GUGUN) {
-        const part = await safeFetchListOnce({ extraKeyword: gu }, `relaxed-${gu}`);
-        tmp = tmp.concat(part);
-      }
-      collected = uniqBy(tmp, it => it.progrmRegistNo);
-    } else {
-      collected = await safeFetchListOnce({}, "relaxed-base");
-    }
-  }
-
-  if (collected.length === 0 && RECRUITING_ONLY) {
-    console.warn("[fallback] RECRUITING_ONLY → false");
-    RECRUITING_ONLY = false;
-    if (SHARD_GUGUN && SIDO_CODE === "6110000") {
-      let tmp = [];
-      for (const gu of SEOUL_GUGUN) {
-        const part = await safeFetchListOnce({ extraKeyword: gu }, `noRecruit-${gu}`);
-        tmp = tmp.concat(part);
-      }
-      collected = uniqBy(tmp, it => it.progrmRegistNo);
-    } else {
-      collected = await safeFetchListOnce({}, "noRecruit-base");
-    }
-  }
-
-  if (collected.length === 0 && SHARD_GUGUN && SIDO_CODE === "6110000") {
-    console.warn("[fallback] keyword 없이 SIDO 전체 재수집");
-    collected = await safeFetchListOnce({ extraKeyword: "" }, "sido-only");
-  }
-
-  // ====== 상세 보강 ======
+// ====== 상세 ======
+async function enrichDetails(collected) {
   let filledApiRecruit = 0;
   let filledDetailRecruit = 0;
   let filledDetailApplied = 0;
@@ -409,6 +436,7 @@ async function safeFetchListOnce(args, tag) {
   let stillEmptyApplied = 0;
   let triedDetail = 0;
 
+  // 캐시에서 모집인원만 선적용
   for (const it of collected) {
     const c = readCache(it.progrmRegistNo);
     if (!it.rcritNmpr && c.recruit) it.rcritNmpr = c.recruit;
@@ -431,6 +459,65 @@ async function safeFetchListOnce(args, tag) {
     });
   })));
 
+  return {
+    filledApiRecruit, filledDetailRecruit, filledDetailApplied,
+    stillEmptyRecruit, stillEmptyApplied, triedDetail
+  };
+}
+
+// ====== 메인 ======
+(async () => {
+  console.log("▶ params", {
+    USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
+    SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE,
+    RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES,
+    SHARD_GUGUN, DESIRED_MIN,
+    LIST_CONCURRENCY, LIST_PAGE_DELAY_MS,
+    DETAIL_CONCURRENCY, AXIOS_TIMEOUT_MS,
+    STRICT_REGION_FILTER
+  });
+
+  let collected = [];
+
+  // 1) 서울 25개 구: 각 구에 대해 다단 폴백을 적용
+  if (SHARD_GUGUN && SIDO_CODE === "6110000") {
+    const shards = SEOUL_GUGUN.map(gu => listLimit(async () => {
+      const part = await collectWithStrategies(gu);
+      console.log(`  └ ${gu} 수집=${part.length}`);
+      return part;
+    }));
+    const results = await Promise.all(shards);
+    collected = uniqBy(results.flat(), it => it.progrmRegistNo);
+
+    // 구 샤딩 전체가 0이면 필터 완화 후 재시도(한 번만)
+    if (collected.length === 0) {
+      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false 로 완화 후 재시도");
+      STRICT_REGION_FILTER = false;
+      RECRUITING_ONLY = false;
+      const shards2 = SEOUL_GUGUN.map(gu => listLimit(async () => collectWithStrategies(gu)));
+      const results2 = await Promise.all(shards2);
+      collected = uniqBy(results2.flat(), it => it.progrmRegistNo);
+    }
+
+    // 그래도 적으면 SIDO Only 한 번 더
+    if (collected.length === 0) {
+      console.warn("[fallback] keyword 없이 SIDO 전체 재수집");
+      collected = await collectWithStrategies("");
+    }
+  } else {
+    // 샤딩 비활성화
+    collected = await collectWithStrategies(KEYWORD);
+    if (collected.length === 0) {
+      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false 로 완화 후 재시도");
+      STRICT_REGION_FILTER = false;
+      RECRUITING_ONLY = false;
+      collected = await collectWithStrategies(KEYWORD);
+    }
+  }
+
+  // ====== 상세 보강 ======
+  const stat2 = await enrichDetails(collected);
+
   // 정렬
   const sortKey = v => {
     if (v == null) return "99999999";
@@ -441,7 +528,7 @@ async function safeFetchListOnce(args, tag) {
 
   // 저장
   fs.mkdirSync("docs/data", { recursive: true });
-  fs.writeFileSync("docs/data/1365.json", JSON.stringify({
+  const outJson = {
     updatedAt: new Date().toISOString(),
     params: {
       USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
@@ -457,19 +544,20 @@ async function safeFetchListOnce(args, tag) {
     },
     stat: {
       total: collected.length,
-      triedDetail,
-      recruit: { fromApiOrCache: filledApiRecruit, fromDetail: filledDetailRecruit, stillEmpty: stillEmptyRecruit },
-      applied: { fromDetail: filledDetailApplied, stillEmpty: stillEmptyApplied }
+      triedDetail: stat2.triedDetail,
+      recruit: { fromApiOrCache: stat2.filledApiRecruit, fromDetail: stat2.filledDetailRecruit, stillEmpty: stat2.stillEmptyRecruit },
+      applied: { fromDetail: stat2.filledDetailApplied, stillEmpty: stat2.stillEmptyApplied }
     },
     count: collected.length,
     items: collected
-  }, null, 2), "utf-8");
+  };
+  fs.writeFileSync("docs/data/1365.json", JSON.stringify(outJson, null, 2), "utf-8");
 
   fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
 
   console.log(`✅ Saved docs/data/1365.json with ${collected.length} items`);
-  console.log(`   ▶ 모집인원 채움: API/CACHE=${filledApiRecruit}, 상세=${filledDetailRecruit}, 미확인=${stillEmptyRecruit}`);
-  console.log(`   ▶ 신청인원 채움(항상 상세): 상세=${filledDetailApplied}, 미확인=${stillEmptyApplied}`);
+  console.log(`   ▶ 모집인원 채움: API/CACHE=${stat2.filledApiRecruit}, 상세=${stat2.filledDetailRecruit}, 미확인=${stat2.stillEmptyRecruit}`);
+  console.log(`   ▶ 신청인원 채움(항상 상세): 상세=${stat2.filledDetailApplied}, 미확인=${stat2.stillEmptyApplied}`);
 })().catch(e => {
   console.error(e);
   process.exit(1);

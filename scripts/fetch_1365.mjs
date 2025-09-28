@@ -1,19 +1,20 @@
 // Node 18+ / ESM
 // 서울 25개 구 샤딩 수집 + 상세페이지 "모집/신청" 동시 추출
-// 안정성 보강 + "0건시 즉시 폴백" 다단 전략 + 디버그 덤프
-// ✅ 변경점: IPv4 강제는 요청 옵션 family:4 로만 처리(lookup 제거) → ERR_INVALID_IP_ADDRESS 방지
+// 안정성 보강: Axios fetch 어댑터(undici), IPv4-first, http→https 폴백, 재시도, 디버그 덤프,
+// 0건일 때 다단계 전략 전환, KST 필터, br 제외, 페이지 지연
 
 import fs from "fs";
-import http from "http";
-import https from "https";
 import axios from "axios";
+import dns from "node:dns";
 import { parseStringPromise } from "xml2js";
+
+// ====== IPv4-first (Node 18+) ======
+try { dns.setDefaultResultOrder?.("ipv4first"); } catch {}
 
 // ====== ENV ======
 const SERVICE_KEY = process.env.SERVICE_KEY?.trim();
 if (!SERVICE_KEY) throw new Error("SERVICE_KEY missing");
 
-// 동작 옵션
 const USE_NOTICE_RANGE   = (process.env.USE_NOTICE_RANGE ?? "false") === "true";
 const OFFSET_BG          = Number(process.env.OFFSET_BG ?? 0);
 const OFFSET_ED          = Number(process.env.OFFSET_ED ?? 30);
@@ -22,7 +23,7 @@ const SIDO_NAME          = (process.env.SIDO_NAME || "").trim();
 const SIDO_CODE          = (process.env.SIDO_CODE || "").trim();         // 6110000 (서울)
 const GUGUN_CODE         = (process.env.GUGUN_CODE || "").trim();
 const PROGRM_STTUS_SE    = (process.env.PROGRM_STTUS_SE || "").trim();   // 2=모집중
-let   RECRUITING_ONLY    = (process.env.RECRUITING_ONLY ?? "true") === "true"; // KST 기준 필터
+let   RECRUITING_ONLY    = (process.env.RECRUITING_ONLY ?? "true") === "true";
 
 const PER                = Number(process.env.PER || 100);
 const MAX_PAGES          = Number(process.env.MAX_PAGES || 50);
@@ -31,29 +32,24 @@ const KEYWORD            = (process.env.KEYWORD || "").trim();
 const SHARD_GUGUN        = (process.env.SHARD_GUGUN ?? "true") === "true";
 const DESIRED_MIN        = Number(process.env.DESIRED_MIN || 5000);
 
-// 동시성/지연/타임아웃
 const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
-const LIST_CONCURRENCY   = Number(process.env.LIST_CONCURRENCY || 1);      // 기본 직렬
-const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350);  // 페이지 간 지연
+const LIST_CONCURRENCY   = Number(process.env.LIST_CONCURRENCY || 1);
+const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350);
 const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 45000);
 
-// 지역 필터 강도 (초기 true 이지만 0건이면 자동 완화)
 let   STRICT_REGION_FILTER = (process.env.STRICT_REGION_FILTER ?? "true") === "true";
 
 // ====== CONSTS ======
-const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
-const EP   = `${BASE}/getVltrSearchWordList`;
+const HOST = "openapi.1365.go.kr";
+const PATH = "/openapi/service/rest/VolunteerPartcptnService/getVltrSearchWordList";
 
 // === 날짜 유틸 (KST) ===
 function ymdKST(date = new Date()) {
   try {
-    const f = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Seoul",
-      year: "numeric", month: "2-digit", day: "2-digit",
-    });
+    const f = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
     return f.format(date).replace(/-/g, "");
   } catch {
     const d = new Date(Date.now() + 9 * 3600 * 1000);
@@ -61,24 +57,18 @@ function ymdKST(date = new Date()) {
   }
 }
 function addDaysKST(baseYmd, days) {
-  const y = Number(baseYmd.slice(0,4)), m = Number(baseYmd.slice(4,6)), d = Number(baseYmd.slice(6,8));
-  const dt = new Date(Date.UTC(y, m - 1, d, 15) + days * 86400000); // 15:00 UTC ≈ 00:00 KST
+  const y = +baseYmd.slice(0,4), m = +baseYmd.slice(4,6), d = +baseYmd.slice(6,8);
+  const dt = new Date(Date.UTC(y, m - 1, d, 15) + days * 86400000);
   return ymdKST(dt);
 }
 const TODAY_YMD = ymdKST();
 const NOTICE_BG = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_BG) : "";
 const NOTICE_ED = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_ED) : "";
 
-// ====== HTTP keep-alive (lookup 제거) ======
-const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 32 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32 });
-
+// ====== Axios: fetch 어댑터 사용 (undici) ======
 const AX = axios.create({
-  httpAgent,
-  httpsAgent,
-  proxy: false,
+  adapter: "fetch",               // ← 핵심: http/https 모듈 대신 fetch 경로 사용
   timeout: AXIOS_TIMEOUT_MS,
-  // 서버가 XML 기본이 가장 안정적 → Accept를 XML로 우선
   headers: {
     Accept: "application/xml,text/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
     "Accept-Language": "ko,en;q=0.8",
@@ -93,27 +83,24 @@ const AX = axios.create({
 async function withRetry(doReq, name = "request", retries = 5) {
   let attempt = 0;
   while (true) {
-    try {
-      return await doReq();
-    } catch (e) {
+    try { return await doReq(); }
+    catch (e) {
       const status = e.response?.status;
       const code = e.code;
       const retriable =
-        ["ECONNABORTED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND"].includes(code) ||
-        status === 429 ||
-        (status >= 500 && status <= 599);
+        ["ECONNABORTED","ECONNRESET","ETIMEDOUT","EAI_AGAIN","ENOTFOUND","ERR_INVALID_IP_ADDRESS"].includes(code) ||
+        status === 429 || (status >= 500 && status <= 599);
       if (!retriable || attempt >= retries) throw e;
-
       attempt++;
       const base = 500 * 2 ** (attempt - 1);
       const delay = Math.min(6000, base) * (0.7 + Math.random() * 0.6);
       console.warn(`[retry ${attempt}/${retries}] ${name}: ${code || status} → wait ${Math.round(delay)}ms`);
-      await new Promise((r) => setTimeout(r, delay));
+      await new Promise(r => setTimeout(r, delay));
     }
   }
 }
 
-// ====== 지역/리스트 유틸 ======
+// ====== 유틸 ======
 const SIDO_TEXT_HINT = { "6110000": ["서울", "서울특별시"] };
 const SEOUL_GUGUN = [
   "강남구","강동구","강북구","강서구","관악구","광진구","구로구","금천구",
@@ -135,7 +122,6 @@ function uniqBy(arr, key){
   return out;
 }
 
-// ====== 간단 동시성 리미터 ======
 function createPLimit(n){
   let active = 0, q = [];
   const next = () => { if (q.length && active < n) { active++; q.shift()(); } };
@@ -157,7 +143,7 @@ function debugDump(name, payload) {
   } catch {}
 }
 
-// ====== 숫자 추출 / 상세 파서 ======
+// ====== 상세 파서 ======
 const pickNumber = (txt) => {
   const m = String(txt).match(/([0-9][0-9,]*)\s*명/i);
   return m ? m[1].replace(/,/g,"") : "";
@@ -189,19 +175,18 @@ const DETAIL_URL = pid =>
 
 async function fetchDetailCounts(pid) {
   const { data, status } = await withRetry(
-    () => AX.get(DETAIL_URL(pid), { responseType: "text", family: 4 }),
+    () => AX.get(DETAIL_URL(pid), { responseType: "text" }),
     `detail:${pid}`
   );
   if (status >= 400) return { recruit: "", applied: "" };
   return extractCounts(data);
 }
 
-// ====== 본문 파서(XML/JSON) ======
+// ====== 응답 본문 파서(XML/JSON) ======
 async function parseBody(data, headers){
   const ct = String(headers["content-type"] || "").toLowerCase();
   const s  = typeof data === "string" ? data.trim() : "";
 
-  // JSON
   if (ct.includes("application/json") || s.startsWith("{")) {
     const j = typeof data === "string" ? JSON.parse(s) : data;
     const header = j?.response?.header;
@@ -212,8 +197,6 @@ async function parseBody(data, headers){
     if (!body) throw new Error(`Unexpected JSON: ${s.slice(0,200)}`);
     return body;
   }
-
-  // XML
   if (s.startsWith("<") || ct.includes("xml")) {
     const j = await parseStringPromise(s, { explicitArray: false });
     const header = j?.response?.header;
@@ -224,8 +207,6 @@ async function parseBody(data, headers){
     if (!body) throw new Error(`Unexpected XML: ${s.slice(0,200)}`);
     return body;
   }
-
-  // 알 수 없는 응답 → 덤프
   debugDump("unknown_body.txt", s);
   throw new Error(`Unknown response: ${s.slice(0,200)}`);
 }
@@ -248,118 +229,84 @@ function readCache(pid) {
 function writeCache(pid, { recruit, applied, touchedApplied=false }) {
   const prev = cache[pid] || {};
   const now = new Date().toISOString();
-  const next = {
-    ...prev,
-    recruit: recruit ?? prev.recruit ?? "",
-    applied: applied ?? prev.applied ?? "",
-    fetchedAt: now,
-  };
+  const next = { ...prev, recruit: recruit ?? prev.recruit ?? "", applied: applied ?? prev.applied ?? "", fetchedAt: now };
   if (touchedApplied) next.appliedFetchedAt = now;
   cache[pid] = next;
 }
 
-// ====== 한 페이지 호출 ======
+// ====== 한 페이지 호출 (http→https 폴백 + ServiceKey 인코딩) ======
 async function fetchListPage({ page, paramsForLog, queryParams }) {
   const qs = new URLSearchParams({ numOfRows: String(PER), pageNo: String(page), _type: "json" });
-  const urlBase = `${EP}?ServiceKey=${SERVICE_KEY}`;
+  for (const [k, v] of Object.entries(queryParams)) if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
 
-  for (const [k, v] of Object.entries(queryParams)) {
-    if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+  const q = `${PATH}?ServiceKey=${encodeURIComponent(SERVICE_KEY)}&${qs.toString()}`;
+  const schemes = ["http", "https"]; // 폴백 순서
+
+  let lastErr;
+  for (const scheme of schemes) {
+    const url = `${scheme}://${HOST}${q}`;
+    try {
+      const resp = await withRetry(
+        () => AX.get(url, { transformResponse: [d=>d] }),
+        `list:${paramsForLog}:${scheme}:p${page}`
+      );
+      const { data, headers, status } = resp;
+      if (status >= 400) {
+        debugDump(`list_${paramsForLog}_${scheme}_p${page}.txt`, typeof data === "string" ? data : JSON.stringify(data));
+        throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
+      }
+      const body  = await parseBody(data, headers);
+      const items = toArray(body?.items?.item);
+      const total = Number(body?.totalCount || 0);
+      return { items, total, raw: typeof data === "string" ? data : JSON.stringify(data) };
+    } catch (e) {
+      lastErr = e;
+      // 다음 스킴으로 폴백
+      console.warn(`[scheme-fallback] ${scheme} failed for ${paramsForLog} p${page}: ${e.code || e.message}`);
+    }
   }
-
-  const url = `${urlBase}&${qs.toString()}`;
-
-  const { data, headers, status } = await withRetry(
-    () => AX.get(url, { transformResponse: [d=>d], family: 4 }),
-    `list:${paramsForLog}:p${page}`
-  );
-
-  if (status >= 400) {
-    debugDump(`list_${paramsForLog}_p${page}.txt`, typeof data === "string" ? data : JSON.stringify(data));
-    throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
-  }
-
-  const body  = await parseBody(data, headers);
-  const items = toArray(body?.items?.item);
-  const total = Number(body?.totalCount || 0);
-
-  return { items, total, raw: typeof data === "string" ? data : JSON.stringify(data) };
+  throw lastErr;
 }
 
-// ====== 전략별 한 샤드 수집 (다단 폴백) ======
+// ====== 다단 전략(0건 시 다음 전략) ======
 function buildStrategies(guKeyword) {
   const strategies = [];
-
-  // A: sido + status + keyword
-  strategies.push(() => ({
+  strategies.push(() => ({ // A: sido + status + keyword
     name: `A_sido+status+kw(${guKeyword || "-"})`,
-    params: {
-      keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(),
-      sidoCd: SIDO_CODE,
-      progrmSttusSe: PROGRM_STTUS_SE,
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
-    }
+    params: { keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(), sidoCd: SIDO_CODE, progrmSttusSe: PROGRM_STTUS_SE,
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
   }));
-
-  // B: sido + status
-  strategies.push(() => ({
+  strategies.push(() => ({ // B: sido + status
     name: "B_sido+status",
-    params: {
-      sidoCd: SIDO_CODE,
-      progrmSttusSe: PROGRM_STTUS_SE,
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
-    }
+    params: { sidoCd: SIDO_CODE, progrmSttusSe: PROGRM_STTUS_SE,
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
   }));
-
-  // C: sido only
-  strategies.push(() => ({
+  strategies.push(() => ({ // C: sido only
     name: "C_sido_only",
-    params: {
-      sidoCd: SIDO_CODE,
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
-    }
+    params: { sidoCd: SIDO_CODE,
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
   }));
-
-  // D: keyword only
-  strategies.push(() => ({
+  strategies.push(() => ({ // D: keyword only
     name: `D_kw_only(${guKeyword || "-"})`,
-    params: {
-      keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(),
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
-    }
+    params: { keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(),
+      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
   }));
-
-  // E: no filter
-  strategies.push(() => ({
+  strategies.push(() => ({ // E: no filter
     name: "E_no_filter",
-    params: {
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {})
-    }
+    params: { ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
   }));
-
   return strategies;
 }
 
 async function collectWithStrategies(guKeyword = "") {
   const strategies = buildStrategies(guKeyword);
-  let out = [];
-
   for (const make of strategies) {
     const { name, params } = make();
-
-    out = [];
+    let kept = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const { items, total, raw } = await fetchListPage({
-        page,
-        paramsForLog: name,
-        queryParams: params
-      });
+      const { items, total, raw } = await fetchListPage({ page, paramsForLog: name, queryParams: params });
+      if (page === 1 && items.length === 0) debugDump(`page1_zero_${name}.xml`, raw);
 
-      if (page === 1 && items.length === 0) {
-        debugDump(`page1_zero_${name}.xml`, raw);
-      }
-
-      // 로컬 필터링
       for (const it of items) {
         if (RECRUITING_ONLY) {
           const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
@@ -371,8 +318,7 @@ async function collectWithStrategies(guKeyword = "") {
           const apiSido = (it.sidoCd ?? "").toString();
           if (apiSido !== "6110000" && !includesAny(pool, hints)) continue;
         }
-
-        out.push({
+        kept.push({
           progrmRegistNo: it.progrmRegistNo ?? "",
           progrmSj:       it.progrmSj ?? "",
           progrmBgnde:    it.progrmBgnde ?? "",
@@ -392,33 +338,25 @@ async function collectWithStrategies(guKeyword = "") {
         });
       }
 
-      console.log(`[${name}] page=${page} total=${total} pageItems=${items.length} kept=${out.length}`);
-
+      console.log(`[${name}] page=${page} total=${total} pageItems=${items.length} kept=${kept.length}`);
       if (LIST_PAGE_DELAY_MS) await new Promise(r => setTimeout(r, LIST_PAGE_DELAY_MS));
-
-      if (items.length === 0 || out.length >= DESIRED_MIN) break;
+      if (items.length === 0 || kept.length >= DESIRED_MIN) break;
     }
-
-    if (out.length > 0) {
-      console.log(`[${name}] → collected ${out.length} items`);
-      return out;
-    } else {
-      console.warn(`[${name}] 0 items → try next strategy`);
+    if (kept.length > 0) {
+      console.log(`[${name}] → collected ${kept.length} items`);
+      return kept;
     }
+    console.warn(`[${name}] 0 items → try next strategy`);
   }
-
-  return out;
+  return [];
 }
 
 // ====== 상세 ======
 async function enrichDetails(collected) {
-  let filledApiRecruit = 0;
-  let filledDetailRecruit = 0;
-  let filledDetailApplied = 0;
-  let stillEmptyRecruit = 0;
-  let stillEmptyApplied = 0;
-  let triedDetail = 0;
+  let filledApiRecruit = 0, filledDetailRecruit = 0, filledDetailApplied = 0;
+  let stillEmptyRecruit = 0, stillEmptyApplied = 0, triedDetail = 0;
 
+  // 캐시에서 모집인원만 선적용
   for (const it of collected) {
     const c = readCache(it.progrmRegistNo);
     if (!it.rcritNmpr && c.recruit) it.rcritNmpr = c.recruit;
@@ -441,10 +379,7 @@ async function enrichDetails(collected) {
     });
   })));
 
-  return {
-    filledApiRecruit, filledDetailRecruit, filledDetailApplied,
-    stillEmptyRecruit, stillEmptyApplied, triedDetail
-  };
+  return { filledApiRecruit, filledDetailRecruit, filledDetailApplied, stillEmptyRecruit, stillEmptyApplied, triedDetail };
 }
 
 // ====== 메인 ======
@@ -462,23 +397,21 @@ async function enrichDetails(collected) {
   let collected = [];
 
   if (SHARD_GUGUN && SIDO_CODE === "6110000") {
-    const shards = SEOUL_GUGUN.map(gu => listLimit(async () => {
+    const tasks = SEOUL_GUGUN.map(gu => createPLimit(LIST_CONCURRENCY)(async () => {
       const part = await collectWithStrategies(gu);
       console.log(`  └ ${gu} 수집=${part.length}`);
       return part;
     }));
-    const results = await Promise.all(shards);
+    const results = await Promise.all(tasks);
     collected = uniqBy(results.flat(), it => it.progrmRegistNo);
 
     if (collected.length === 0) {
-      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false 로 완화 후 재시도");
-      STRICT_REGION_FILTER = false;
-      RECRUITING_ONLY = false;
-      const shards2 = SEOUL_GUGUN.map(gu => listLimit(async () => collectWithStrategies(gu)));
-      const results2 = await Promise.all(shards2);
+      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false");
+      STRICT_REGION_FILTER = false; RECRUITING_ONLY = false;
+      const tasks2 = SEOUL_GUGUN.map(gu => createPLimit(LIST_CONCURRENCY)(async () => collectWithStrategies(gu)));
+      const results2 = await Promise.all(tasks2);
       collected = uniqBy(results2.flat(), it => it.progrmRegistNo);
     }
-
     if (collected.length === 0) {
       console.warn("[fallback] keyword 없이 SIDO 전체 재수집");
       collected = await collectWithStrategies("");
@@ -486,14 +419,12 @@ async function enrichDetails(collected) {
   } else {
     collected = await collectWithStrategies(KEYWORD);
     if (collected.length === 0) {
-      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false 로 완화 후 재시도");
-      STRICT_REGION_FILTER = false;
-      RECRUITING_ONLY = false;
+      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false");
+      STRICT_REGION_FILTER = false; RECRUITING_ONLY = false;
       collected = await collectWithStrategies(KEYWORD);
     }
   }
 
-  // ====== 상세 보강 ======
   const stat2 = await enrichDetails(collected);
 
   // 정렬
@@ -530,8 +461,7 @@ async function enrichDetails(collected) {
     items: collected
   };
   fs.writeFileSync("docs/data/1365.json", JSON.stringify(outJson, null, 2), "utf-8");
-
-  fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
+  fs.writeFileSync("docs/data/recruit_cache.json", JSON.stringify(cache, null, 2), "utf-8");
 
   console.log(`✅ Saved docs/data/1365.json with ${collected.length} items`);
   console.log(`   ▶ 모집인원 채움: API/CACHE=${stat2.filledApiRecruit}, 상세=${stat2.filledDetailRecruit}, 미확인=${stat2.stillEmptyRecruit}`);

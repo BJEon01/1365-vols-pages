@@ -1,120 +1,82 @@
 // Node 18+ / ESM
-// 서울 25개 구 샤딩 수집 + 상세페이지 "모집/신청" 동시 추출
-// 안정성 보강: Axios fetch 어댑터(undici), IPv4-first, http→https 폴백, 재시도, 디버그 덤프,
-// 0건일 때 다단계 전략 전환, KST 필터, br 제외, 페이지 지연
+// 서울 25개 구로 샤딩해 처음부터 서울 결과를 많이 모으는 버전
+// + 상세페이지에서 "모집인원"과 "신청인원"을 함께 추출 (신청인원은 매번 갱신)
 
 import fs from "fs";
+import http from "http";
+import https from "https";
 import axios from "axios";
-import dns from "node:dns";
 import { parseStringPromise } from "xml2js";
-
-// ====== IPv4-first (Node 18+) ======
-try { dns.setDefaultResultOrder?.("ipv4first"); } catch {}
 
 // ====== ENV ======
 const SERVICE_KEY = process.env.SERVICE_KEY?.trim();
 if (!SERVICE_KEY) throw new Error("SERVICE_KEY missing");
 
-const USE_NOTICE_RANGE   = (process.env.USE_NOTICE_RANGE ?? "false") === "true";
-const OFFSET_BG          = Number(process.env.OFFSET_BG ?? 0);
-const OFFSET_ED          = Number(process.env.OFFSET_ED ?? 30);
+// 기본 동작 옵션
+const USE_NOTICE_RANGE = (process.env.USE_NOTICE_RANGE ?? "false") === "true";
+const OFFSET_BG   = Number(process.env.OFFSET_BG ?? 0);
+const OFFSET_ED   = Number(process.env.OFFSET_ED ?? 30);
 
-const SIDO_NAME          = (process.env.SIDO_NAME || "").trim();
-const SIDO_CODE          = (process.env.SIDO_CODE || "").trim();         // 6110000 (서울)
-const GUGUN_CODE         = (process.env.GUGUN_CODE || "").trim();
-const PROGRM_STTUS_SE    = (process.env.PROGRM_STTUS_SE || "").trim();   // 2=모집중
-let   RECRUITING_ONLY    = (process.env.RECRUITING_ONLY ?? "true") === "true";
+const SIDO_NAME   = (process.env.SIDO_NAME || "").trim();    // 선택 텍스트 보정
+const SIDO_CODE   = (process.env.SIDO_CODE || "").trim();    // 6110000 (서울)
+const GUGUN_CODE  = (process.env.GUGUN_CODE || "").trim();   // 미사용(샤딩은 이름 위주)
+const PROGRM_STTUS_SE = (process.env.PROGRM_STTUS_SE || "").trim(); // 2=모집중
+const RECRUITING_ONLY = (process.env.RECRUITING_ONLY ?? "true") === "true"; // 오늘 포함 모집기간 로컬필터
 
-const PER                = Number(process.env.PER || 100);
-const MAX_PAGES          = Number(process.env.MAX_PAGES || 50);
-const KEYWORD            = (process.env.KEYWORD || "").trim();
+const PER        = Number(process.env.PER || 100);
+const MAX_PAGES  = Number(process.env.MAX_PAGES || 50); // 페이지 상한
+const KEYWORD    = (process.env.KEYWORD || "").trim();
 
-const SHARD_GUGUN        = (process.env.SHARD_GUGUN ?? "true") === "true";
-const DESIRED_MIN        = Number(process.env.DESIRED_MIN || 5000);
+// 서울 구 단위 샤딩
+const SHARD_GUGUN = (process.env.SHARD_GUGUN ?? "true") === "true";
+const DESIRED_MIN = Number(process.env.DESIRED_MIN || 5000); // 서울 결과를 이정도 모으면 조기종료
 
+// 상세 병렬
 const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
-const LIST_CONCURRENCY   = Number(process.env.LIST_CONCURRENCY || 1);
-const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350);
-const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 45000);
-
-let   STRICT_REGION_FILTER = (process.env.STRICT_REGION_FILTER ?? "true") === "true";
-
 // ====== CONSTS ======
-const HOST = "openapi.1365.go.kr";
-const PATH = "/openapi/service/rest/VolunteerPartcptnService/getVltrSearchWordList";
+const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
+const EP   = `${BASE}/getVltrSearchWordList`;
 
-// === 날짜 유틸 (KST) ===
-function ymdKST(date = new Date()) {
-  try {
-    const f = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
-    return f.format(date).replace(/-/g, "");
-  } catch {
-    const d = new Date(Date.now() + 9 * 3600 * 1000);
-    return d.toISOString().slice(0, 10).replace(/-/g, "");
-  }
-}
-function addDaysKST(baseYmd, days) {
-  const y = +baseYmd.slice(0,4), m = +baseYmd.slice(4,6), d = +baseYmd.slice(6,8);
-  const dt = new Date(Date.UTC(y, m - 1, d, 15) + days * 86400000);
-  return ymdKST(dt);
-}
-const TODAY_YMD = ymdKST();
-const NOTICE_BG = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_BG) : "";
-const NOTICE_ED = USE_NOTICE_RANGE ? addDaysKST(TODAY_YMD, OFFSET_ED) : "";
+const today = new Date();
+const ymd = d => d.toISOString().slice(0,10).replace(/-/g,"");
+const addDays = (dt, n) => { const t = new Date(dt); t.setDate(t.getDate()+n); return t; };
 
-// ====== Axios: fetch 어댑터 사용 (undici) ======
+const NOTICE_BG = ymd(addDays(today, OFFSET_BG));
+const NOTICE_ED = ymd(addDays(today, OFFSET_ED));
+
+// ====== HTTP keep-alive ======
+const httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 128 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128 });
 const AX = axios.create({
-  adapter: "fetch",               // ← 핵심: http/https 모듈 대신 fetch 경로 사용
-  timeout: AXIOS_TIMEOUT_MS,
-  headers: {
-    Accept: "application/xml,text/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
-    "Accept-Language": "ko,en;q=0.8",
-    "User-Agent": "Mozilla/5.0",
-    "Accept-Encoding": "gzip, deflate", // br 제외
-  },
-  transitional: { clarifyTimeoutError: true },
-  validateStatus: (s) => s >= 200 && s < 500,
+  httpAgent, httpsAgent,
+  headers: { "Accept-Language":"ko,en;q=0.8", "User-Agent":"Mozilla/5.0" },
+  timeout: 15000,
+  validateStatus: s => s >= 200 && s < 500
 });
 
-// ====== 재시도(지수백오프+지터) ======
-async function withRetry(doReq, name = "request", retries = 5) {
-  let attempt = 0;
-  while (true) {
-    try { return await doReq(); }
-    catch (e) {
-      const status = e.response?.status;
-      const code = e.code;
-      const retriable =
-        ["ECONNABORTED","ECONNRESET","ETIMEDOUT","EAI_AGAIN","ENOTFOUND","ERR_INVALID_IP_ADDRESS"].includes(code) ||
-        status === 429 || (status >= 500 && status <= 599);
-      if (!retriable || attempt >= retries) throw e;
-      attempt++;
-      const base = 500 * 2 ** (attempt - 1);
-      const delay = Math.min(6000, base) * (0.7 + Math.random() * 0.6);
-      console.warn(`[retry ${attempt}/${retries}] ${name}: ${code || status} → wait ${Math.round(delay)}ms`);
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-}
+// ====== 지역 힌트 ======
+const SIDO_TEXT_HINT = {
+  "6110000": ["서울", "서울특별시"],
+};
 
-// ====== 유틸 ======
-const SIDO_TEXT_HINT = { "6110000": ["서울", "서울특별시"] };
 const SEOUL_GUGUN = [
   "강남구","강동구","강북구","강서구","관악구","광진구","구로구","금천구",
   "노원구","도봉구","동대문구","동작구","마포구","서대문구","서초구","성동구",
   "성북구","송파구","양천구","영등포구","용산구","은평구","종로구","중구","중랑구"
 ];
 
+// ====== 유틸 ======
 const toArray = x => (x ? (Array.isArray(x) ? x : [x]) : []);
-const isYmd   = v => typeof v === "string" && /^\d{8}$/.test(v);
+const isYmd = v => typeof v === "string" && /^\d{8}$/.test(v);
 const between = (v, a, b) => (isYmd(v) ? (!a || v >= a) && (!b || v <= b) : false);
 const includesAny = (s, arr) => arr.some(w => w && String(s).includes(w));
 
 function uniqBy(arr, key){
-  const seen = new Set(); const out = [];
+  const seen = new Set();
+  const out = [];
   for (const it of arr) {
     const k = key(it);
     if (!seen.has(k)) { seen.add(k); out.push(it); }
@@ -122,67 +84,77 @@ function uniqBy(arr, key){
   return out;
 }
 
-function createPLimit(n){
-  let active = 0, q = [];
-  const next = () => { if (q.length && active < n) { active++; q.shift()(); } };
-  return fn => new Promise((res, rej) => {
-    const run = () => fn().then(res, rej).finally(()=>{ active--; next(); });
-    q.push(run); next();
-  });
-}
-const detailLimit = createPLimit(DETAIL_CONCURRENCY);
-const listLimit   = createPLimit(LIST_CONCURRENCY);
-
-// ====== 디버그 덤프 ======
-function debugDump(name, payload) {
-  try {
-    fs.mkdirSync("docs/debug", { recursive: true });
-    const p = `docs/debug/${name}`;
-    fs.writeFileSync(p, typeof payload === "string" ? payload : String(payload), "utf-8");
-    console.warn(`[debug] dumped → ${p}`);
-  } catch {}
-}
-
-// ====== 상세 파서 ======
+// 숫자만 추출
 const pickNumber = (txt) => {
   const m = String(txt).match(/([0-9][0-9,]*)\s*명/i);
   return m ? m[1].replace(/,/g,"") : "";
 };
+
+// 라벨 기반 숫자 추출기 (dt/dd, th/td, 근처 스캔)
 function extractCountByLabels(html, labels) {
   const s = String(html);
+
   for (const label of labels) {
+    // 1) <dt>라벨</dt> 다음 <dd>
     let m = s.match(new RegExp(`<dt[^>]*>\\s*(?:${label})\\s*<\\/dt>[\\s\\S]{0,200}?(<dd[^>]*>[\\s\\S]*?<\\/dd>)`, "i"));
-    if (m) { const n = pickNumber(m[1].replace(/<[^>]+>/g, " ")); if (n) return n; }
+    if (m) {
+      const txt = m[1].replace(/<[^>]+>/g, " ");
+      const n = pickNumber(txt);
+      if (n) return n;
+    }
+
+    // 2) <th>라벨</th> 인접 <td>
     m = s.match(new RegExp(`<th[^>]*>\\s*(?:${label})[\\s\\S]{0,120}?<td[^>]*>([\\s\\S]{0,100}?)<\\/td>`, "i"));
-    if (m) { const n = pickNumber(m[1].replace(/<[^>]+>/g, " ")); if (n) return n; }
+    if (m) {
+      const txt = m[1].replace(/<[^>]+>/g, " ");
+      const n = pickNumber(txt);
+      if (n) return n;
+    }
+
+    // 3) 라벨 근처 윈도우 스캔 (앞쪽 첫 번째 "XX명")
     m = s.match(new RegExp(`(?:${label})[\\s\\S]{0,300}?([0-9][0-9,]*)\\s*명`, "i"));
-    if (m) return (m[1] || "").replace(/,/g,"");
+    if (m) {
+      const n = (m[1] || "").replace(/,/g,"");
+      if (n) return n;
+    }
   }
   return "";
 }
+
+// 상세 페이지에서 모집/신청 동시 추출
 function extractCounts(html) {
-  const recruit = extractCountByLabels(html, ["모집\\s*인원","총\\s*모집\\s*인원"]);
-  let applied   = extractCountByLabels(html, ["신청\\s*인원","신청\\s*현황","신청\\s*자(?:\\s*수)?","현재\\s*신청"]);
+  const recruit = extractCountByLabels(html, [
+    "모집\\s*인원",
+    "총\\s*모집\\s*인원"
+  ]);
+
+  // 신청인원 / 신청자 / 신청현황(보통 "0명 / 10명" 형태면 앞 숫자를 잡음)
+  let applied = extractCountByLabels(html, [
+    "신청\\s*인원",
+    "신청\\s*현황",
+    "신청\\s*자(?:\\s*수)?",
+    "현재\\s*신청"
+  ]);
+
+  // 혹시 "신청 3명 / 모집 10명" 같이 붙어 있을 때 보정
   if (!applied) {
     const s = String(html).replace(/<[^>]+>/g, " ");
     const m = s.match(/신청[^0-9]{0,10}?([0-9][0-9,]*)\s*명\s*\/\s*([0-9][0-9,]*)\s*명/);
     if (m) applied = m[1].replace(/,/g,"");
   }
+
   return { recruit, applied };
 }
+
 const DETAIL_URL = pid =>
   `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(pid)}`;
 
 async function fetchDetailCounts(pid) {
-  const { data, status } = await withRetry(
-    () => AX.get(DETAIL_URL(pid), { responseType: "text" }),
-    `detail:${pid}`
-  );
+  const { data, status } = await AX.get(DETAIL_URL(pid), { responseType: "text" });
   if (status >= 400) return { recruit: "", applied: "" };
   return extractCounts(data);
 }
 
-// ====== 응답 본문 파서(XML/JSON) ======
 async function parseBody(data, headers){
   const ct = String(headers["content-type"] || "").toLowerCase();
   const s  = typeof data === "string" ? data.trim() : "";
@@ -197,7 +169,7 @@ async function parseBody(data, headers){
     if (!body) throw new Error(`Unexpected JSON: ${s.slice(0,200)}`);
     return body;
   }
-  if (s.startsWith("<") || ct.includes("xml")) {
+  if (s.startsWith("<")) {
     const j = await parseStringPromise(s, { explicitArray: false });
     const header = j?.response?.header;
     if (header && header.resultCode && header.resultCode !== "00") {
@@ -207,171 +179,190 @@ async function parseBody(data, headers){
     if (!body) throw new Error(`Unexpected XML: ${s.slice(0,200)}`);
     return body;
   }
-  debugDump("unknown_body.txt", s);
   throw new Error(`Unknown response: ${s.slice(0,200)}`);
 }
+
+// 간단 동시성 리미터
+function pLimit(n){
+  let active = 0, q = [];
+  const next = () => { if (q.length && active < n) { active++; q.shift()(); } };
+  return fn => new Promise((res, rej) => {
+    const run = () => fn().then(res, rej).finally(()=>{ active--; next(); });
+    q.push(run); next();
+  });
+}
+const limit = pLimit(DETAIL_CONCURRENCY);
 
 // ====== 캐시 ======
 const CACHE_PATH = "docs/data/recruit_cache.json";
 let cache = {};
 try { cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8")); } catch { cache = {}; }
 
+// 구 캐시 호환 + 읽기/쓰기 헬퍼
 function readCache(pid) {
   const c = cache[pid];
   if (!c) return { recruit: "", applied: "", appliedFetchedAt: null };
-  if (typeof c === "string") return { recruit: c, applied: "", appliedFetchedAt: null };
+  if (typeof c === "string") return { recruit: c, applied: "", appliedFetchedAt: null }; // 최구버전 호환
   return {
     recruit: c.recruit ?? c.value ?? "",
     applied: c.applied ?? c.aplyNmpr ?? "",
-    appliedFetchedAt: c.appliedFetchedAt ?? c.fetchedAt ?? null,
+    appliedFetchedAt: c.appliedFetchedAt ?? c.fetchedAt ?? null, // 구버전 호환
   };
 }
 function writeCache(pid, { recruit, applied, touchedApplied=false }) {
   const prev = cache[pid] || {};
   const now = new Date().toISOString();
-  const next = { ...prev, recruit: recruit ?? prev.recruit ?? "", applied: applied ?? prev.applied ?? "", fetchedAt: now };
+  const next = {
+    ...prev,
+    recruit: recruit ?? prev.recruit ?? "",
+    applied: applied ?? prev.applied ?? "",
+    fetchedAt: now,
+  };
   if (touchedApplied) next.appliedFetchedAt = now;
   cache[pid] = next;
 }
 
-// ====== 한 페이지 호출 (http→https 폴백 + ServiceKey 인코딩) ======
-async function fetchListPage({ page, paramsForLog, queryParams }) {
-  const qs = new URLSearchParams({ numOfRows: String(PER), pageNo: String(page), _type: "json" });
-  for (const [k, v] of Object.entries(queryParams)) if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+// ====== 한 번의 리스트 호출 (키워드 추가 인자 지원) ======
+async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" } = {}){
+  const out = [];
+  for (let page = pageStart; page <= pageStop; page++){
+    const qs = new URLSearchParams({
+      numOfRows: String(PER),
+      pageNo: String(page),
+      _type: "json"
+    });
 
-  const q = `${PATH}?ServiceKey=${encodeURIComponent(SERVICE_KEY)}&${qs.toString()}`;
-  const schemes = ["http", "https"]; // 폴백 순서
-
-  let lastErr;
-  for (const scheme of schemes) {
-    const url = `${scheme}://${HOST}${q}`;
-    try {
-      const resp = await withRetry(
-        () => AX.get(url, { transformResponse: [d=>d] }),
-        `list:${paramsForLog}:${scheme}:p${page}`
-      );
-      const { data, headers, status } = resp;
-      if (status >= 400) {
-        debugDump(`list_${paramsForLog}_${scheme}_p${page}.txt`, typeof data === "string" ? data : JSON.stringify(data));
-        throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
-      }
-      const body  = await parseBody(data, headers);
-      const items = toArray(body?.items?.item);
-      const total = Number(body?.totalCount || 0);
-      return { items, total, raw: typeof data === "string" ? data : JSON.stringify(data) };
-    } catch (e) {
-      lastErr = e;
-      // 다음 스킴으로 폴백
-      console.warn(`[scheme-fallback] ${scheme} failed for ${paramsForLog} p${page}: ${e.code || e.message}`);
+    if (USE_NOTICE_RANGE) {
+      qs.set("noticeBgnde", NOTICE_BG);
+      qs.set("noticeEndde", NOTICE_ED);
     }
-  }
-  throw lastErr;
-}
+    const kwAll = [KEYWORD, extraKeyword].filter(Boolean).join(" ").trim();
+    if (kwAll) qs.set("keyword", kwAll);
+    if (SIDO_CODE) qs.set("sidoCd", SIDO_CODE);
+    if (GUGUN_CODE) qs.set("gugunCd", GUGUN_CODE);
+    if (PROGRM_STTUS_SE) qs.set("progrmSttusSe", PROGRM_STTUS_SE);
 
-// ====== 다단 전략(0건 시 다음 전략) ======
-function buildStrategies(guKeyword) {
-  const strategies = [];
-  strategies.push(() => ({ // A: sido + status + keyword
-    name: `A_sido+status+kw(${guKeyword || "-"})`,
-    params: { keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(), sidoCd: SIDO_CODE, progrmSttusSe: PROGRM_STTUS_SE,
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
-  }));
-  strategies.push(() => ({ // B: sido + status
-    name: "B_sido+status",
-    params: { sidoCd: SIDO_CODE, progrmSttusSe: PROGRM_STTUS_SE,
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
-  }));
-  strategies.push(() => ({ // C: sido only
-    name: "C_sido_only",
-    params: { sidoCd: SIDO_CODE,
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
-  }));
-  strategies.push(() => ({ // D: keyword only
-    name: `D_kw_only(${guKeyword || "-"})`,
-    params: { keyword: [KEYWORD, guKeyword].filter(Boolean).join(" ").trim(),
-      ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
-  }));
-  strategies.push(() => ({ // E: no filter
-    name: "E_no_filter",
-    params: { ...(USE_NOTICE_RANGE ? { noticeBgnde: NOTICE_BG, noticeEndde: NOTICE_ED } : {}) }
-  }));
-  return strategies;
-}
+    const url = `${EP}?serviceKey=${SERVICE_KEY}&${qs.toString()}`;
+    const { data, headers, status } = await AX.get(url, { transformResponse: [d=>d] });
+    if (status >= 400) throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
 
-async function collectWithStrategies(guKeyword = "") {
-  const strategies = buildStrategies(guKeyword);
-  for (const make of strategies) {
-    const { name, params } = make();
-    let kept = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const { items, total, raw } = await fetchListPage({ page, paramsForLog: name, queryParams: params });
-      if (page === 1 && items.length === 0) debugDump(`page1_zero_${name}.xml`, raw);
+    const body  = await parseBody(data, headers);
+    const items = toArray(body?.items?.item);
+    const total = Number(body?.totalCount || 0);
 
-      for (const it of items) {
-        if (RECRUITING_ONLY) {
-          const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
-          if (!(isYmd(nb) && isYmd(ne) && between(TODAY_YMD, nb, ne))) continue;
-        }
-        if (SIDO_CODE === "6110000" && STRICT_REGION_FILTER) {
-          const pool = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
-          const hints = SIDO_NAME ? [SIDO_NAME] : (SIDO_TEXT_HINT["6110000"] || []);
-          const apiSido = (it.sidoCd ?? "").toString();
-          if (apiSido !== "6110000" && !includesAny(pool, hints)) continue;
-        }
-        kept.push({
-          progrmRegistNo: it.progrmRegistNo ?? "",
-          progrmSj:       it.progrmSj ?? "",
-          progrmBgnde:    it.progrmBgnde ?? "",
-          progrmEndde:    it.progrmEndde ?? "",
-          noticeBgnde:    it.noticeBgnde ?? "",
-          noticeEndde:    it.noticeEndde ?? "",
-          rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
-          aplyNmpr:       "",
-          mnnstNm:        it.mnnstNm ?? "",
-          nanmmbyNm:      it.nanmmbyNm ?? "",
-          actPlace:       it.actPlace ?? "",
-          actBeginTm:     (it.actBeginTm ?? "").toString().trim(),
-          actEndTm:       (it.actEndTm ?? "").toString().trim(),
-          actBeginMnt:    (it.actBeginMnt ?? "").toString().trim(),
-          actEndMnt:      (it.actEndMnt ?? "").toString().trim(),
-          sidoCd:         (it.sidoCd ?? "").toString().trim(),
-        });
+    console.log(`page=${page} total=${total} pageItems=${items.length} kw="${extraKeyword}"`);
+
+    if (!items.length) break;
+
+    for (const it of items) {
+      // (선택) 오늘 포함 모집기간만
+      if (RECRUITING_ONLY) {
+        const nb = it.noticeBgnde ?? "", ne = it.noticeEndde ?? "";
+        if (!(isYmd(nb) && isYmd(ne) && between(ymd(today), nb, ne))) continue;
       }
 
-      console.log(`[${name}] page=${page} total=${total} pageItems=${items.length} kept=${kept.length}`);
-      if (LIST_PAGE_DELAY_MS) await new Promise(r => setTimeout(r, LIST_PAGE_DELAY_MS));
-      if (items.length === 0 || kept.length >= DESIRED_MIN) break;
+      // 지역 강제 필터 (API가 무시해도 안전장치)
+      if (SIDO_CODE === "6110000") {
+        const pool = `${it.actPlace||""} ${it.mnnstNm||""} ${it.nanmmbyNm||""}`;
+        const hints = SIDO_NAME ? [SIDO_NAME] : (SIDO_TEXT_HINT["6110000"] || []);
+        const apiSido = (it.sidoCd ?? "").toString();
+        if (apiSido !== "6110000" && !includesAny(pool, hints)) {
+          continue;
+        }
+      }
+
+      out.push({
+        progrmRegistNo: it.progrmRegistNo ?? "",
+        progrmSj:       it.progrmSj ?? "",
+        progrmBgnde:    it.progrmBgnde ?? "",
+        progrmEndde:    it.progrmEndde ?? "",
+        noticeBgnde:    it.noticeBgnde ?? "",
+        noticeEndde:    it.noticeEndde ?? "",
+        rcritNmpr:      (it.rcritNmpr ?? "").toString().trim(),
+        // 신청인원은 항상 상세에서 최신으로 덮어쓸 것
+        aplyNmpr:       "",
+        mnnstNm:        it.mnnstNm ?? "",
+        nanmmbyNm:      it.nanmmbyNm ?? "",
+        actPlace:       it.actPlace ?? "",
+        actBeginTm:     (it.actBeginTm ?? "").toString().trim(),
+        actEndTm:       (it.actEndTm ?? "").toString().trim(),
+        actBeginMnt:    (it.actBeginMnt ?? "").toString().trim(),
+        actEndMnt:      (it.actEndMnt ?? "").toString().trim(),
+      });
     }
-    if (kept.length > 0) {
-      console.log(`[${name}] → collected ${kept.length} items`);
-      return kept;
-    }
-    console.warn(`[${name}] 0 items → try next strategy`);
+
+    // 조기 종료: 충분히 모였으면 페이지 루프 중단(샤드 안)
+    if (out.length >= DESIRED_MIN) break;
   }
-  return [];
+  return out;
 }
 
-// ====== 상세 ======
-async function enrichDetails(collected) {
-  let filledApiRecruit = 0, filledDetailRecruit = 0, filledDetailApplied = 0;
-  let stillEmptyRecruit = 0, stillEmptyApplied = 0, triedDetail = 0;
+// ====== 메인 수집 ======
+(async () => {
+  console.log("▶ params", {
+    USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
+    SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE,
+    RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES,
+    SHARD_GUGUN, DESIRED_MIN
+  });
 
-  // 캐시에서 모집인원만 선적용
+  let collected = [];
+
+  if (SHARD_GUGUN && SIDO_CODE === "6110000") {
+    // 서울 25개 구로 샤딩해서 수집
+    for (const gu of SEOUL_GUGUN) {
+      const part = await fetchListOnce({ extraKeyword: gu });
+      collected = collected.concat(part);
+      // 전체 dedup
+      collected = uniqBy(collected, it => it.progrmRegistNo);
+      console.log(`  └ ${gu} 누적=${collected.length}`);
+
+      if (collected.length >= DESIRED_MIN) break; // 충분히 모이면 샤딩 루프도 중단
+    }
+    // 보너스: 샤딩 후에도 부족하면 기본(키워드 없음)으로 한 번 더
+    if (collected.length < DESIRED_MIN) {
+      const part = await fetchListOnce({ extraKeyword: "" });
+      collected = uniqBy(collected.concat(part), it => it.progrmRegistNo);
+    }
+  } else {
+    // 샤딩 비활성화: 단일 쿼리만
+    collected = await fetchListOnce();
+  }
+
+  // ====== 상세 보강 ======
+  // 캐시 반영: 모집인원만(비었을 때) 캐시로 메우기. 신청인원은 항상 상세로 덮어쓸 예정이라 캐시 미사용.
+  let filledApiRecruit = 0;
+  let filledDetailRecruit = 0;
+  let filledDetailApplied = 0;
+  let stillEmptyRecruit = 0;
+  let stillEmptyApplied = 0;
+  let triedDetail = 0;
+
   for (const it of collected) {
     const c = readCache(it.progrmRegistNo);
     if (!it.rcritNmpr && c.recruit) it.rcritNmpr = c.recruit;
     if (it.rcritNmpr) filledApiRecruit++;
+    // aplyNmpr는 캐시 선적용하지 않음(항상 상세로 갱신)
   }
 
+  // 항상 상세조회해서 신청인원 갱신 (MAX_DETAIL 한도 내)
   const needDetail = collected.slice(0, MAX_DETAIL);
-  await Promise.all(needDetail.map(it => detailLimit(async () => {
+
+  await Promise.all(needDetail.map(it => limit(async () => {
     if (DETAIL_DELAY_MS) await new Promise(r=>setTimeout(r, DETAIL_DELAY_MS));
     triedDetail++;
     const { recruit, applied } = await fetchDetailCounts(it.progrmRegistNo);
+
+    // 모집인원: API가 비어있을 때만 상세로 보강
     if (recruit && !it.rcritNmpr) { it.rcritNmpr = recruit; filledDetailRecruit++; }
+
+    // 신청인원: 항상 상세 결과로 갱신(값 있으면 덮어씀)
     if (applied) { it.aplyNmpr = applied; filledDetailApplied++; }
+
     if (!it.rcritNmpr) stillEmptyRecruit++;
     if (!it.aplyNmpr)  stillEmptyApplied++;
+
+    // 캐시 갱신 (신청인원은 매번 최신으로 덮어쓴 값 저장)
     writeCache(it.progrmRegistNo, {
       recruit: it.rcritNmpr || recruit || undefined,
       applied: it.aplyNmpr || applied || undefined,
@@ -379,55 +370,7 @@ async function enrichDetails(collected) {
     });
   })));
 
-  return { filledApiRecruit, filledDetailRecruit, filledDetailApplied, stillEmptyRecruit, stillEmptyApplied, triedDetail };
-}
-
-// ====== 메인 ======
-(async () => {
-  console.log("▶ params", {
-    USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
-    SIDO_CODE, GUGUN_CODE, PROGRM_STTUS_SE,
-    RECRUITING_ONLY, KEYWORD, PER, MAX_PAGES,
-    SHARD_GUGUN, DESIRED_MIN,
-    LIST_CONCURRENCY, LIST_PAGE_DELAY_MS,
-    DETAIL_CONCURRENCY, AXIOS_TIMEOUT_MS,
-    STRICT_REGION_FILTER
-  });
-
-  let collected = [];
-
-  if (SHARD_GUGUN && SIDO_CODE === "6110000") {
-    const tasks = SEOUL_GUGUN.map(gu => createPLimit(LIST_CONCURRENCY)(async () => {
-      const part = await collectWithStrategies(gu);
-      console.log(`  └ ${gu} 수집=${part.length}`);
-      return part;
-    }));
-    const results = await Promise.all(tasks);
-    collected = uniqBy(results.flat(), it => it.progrmRegistNo);
-
-    if (collected.length === 0) {
-      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false");
-      STRICT_REGION_FILTER = false; RECRUITING_ONLY = false;
-      const tasks2 = SEOUL_GUGUN.map(gu => createPLimit(LIST_CONCURRENCY)(async () => collectWithStrategies(gu)));
-      const results2 = await Promise.all(tasks2);
-      collected = uniqBy(results2.flat(), it => it.progrmRegistNo);
-    }
-    if (collected.length === 0) {
-      console.warn("[fallback] keyword 없이 SIDO 전체 재수집");
-      collected = await collectWithStrategies("");
-    }
-  } else {
-    collected = await collectWithStrategies(KEYWORD);
-    if (collected.length === 0) {
-      console.warn("[fallback] STRICT_REGION_FILTER → false, RECRUITING_ONLY → false");
-      STRICT_REGION_FILTER = false; RECRUITING_ONLY = false;
-      collected = await collectWithStrategies(KEYWORD);
-    }
-  }
-
-  const stat2 = await enrichDetails(collected);
-
-  // 정렬
+  // 정렬: 모집기간 종료일 오름차순
   const sortKey = v => {
     if (v == null) return "99999999";
     const s = String(v).replace(/\D/g, "");
@@ -437,7 +380,7 @@ async function enrichDetails(collected) {
 
   // 저장
   fs.mkdirSync("docs/data", { recursive: true });
-  const outJson = {
+  fs.writeFileSync("docs/data/1365.json", JSON.stringify({
     updatedAt: new Date().toISOString(),
     params: {
       USE_NOTICE_RANGE, NOTICE_BG, NOTICE_ED,
@@ -446,26 +389,24 @@ async function enrichDetails(collected) {
       PROGRM_STTUS_SE, RECRUITING_ONLY,
       PER, MAX_PAGES, KEYWORD,
       SHARD_GUGUN, DESIRED_MIN,
-      LIST_CONCURRENCY, LIST_PAGE_DELAY_MS,
       DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL,
-      AXIOS_TIMEOUT_MS, STRICT_REGION_FILTER,
-      refreshApplied: "always"
+      refreshApplied: "always" // 기록용
     },
     stat: {
       total: collected.length,
-      triedDetail: stat2.triedDetail,
-      recruit: { fromApiOrCache: stat2.filledApiRecruit, fromDetail: stat2.filledDetailRecruit, stillEmpty: stat2.stillEmptyRecruit },
-      applied: { fromDetail: stat2.filledDetailApplied, stillEmpty: stat2.stillEmptyApplied }
+      triedDetail,
+      recruit: { fromApiOrCache: filledApiRecruit, fromDetail: filledDetailRecruit, stillEmpty: stillEmptyRecruit },
+      applied: { fromDetail: filledDetailApplied, stillEmpty: stillEmptyApplied }
     },
     count: collected.length,
     items: collected
-  };
-  fs.writeFileSync("docs/data/1365.json", JSON.stringify(outJson, null, 2), "utf-8");
-  fs.writeFileSync("docs/data/recruit_cache.json", JSON.stringify(cache, null, 2), "utf-8");
+  }, null, 2), "utf-8");
+
+  fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
 
   console.log(`✅ Saved docs/data/1365.json with ${collected.length} items`);
-  console.log(`   ▶ 모집인원 채움: API/CACHE=${stat2.filledApiRecruit}, 상세=${stat2.filledDetailRecruit}, 미확인=${stat2.stillEmptyRecruit}`);
-  console.log(`   ▶ 신청인원 채움(항상 상세): 상세=${stat2.filledDetailApplied}, 미확인=${stat2.stillEmptyApplied}`);
+  console.log(`   ▶ 모집인원 채움: API/CACHE=${filledApiRecruit}, 상세=${filledDetailRecruit}, 미확인=${stillEmptyRecruit}`);
+  console.log(`   ▶ 신청인원 채움(항상 상세): 상세=${filledDetailApplied}, 미확인=${stillEmptyApplied}`);
 })().catch(e => {
   console.error(e);
   process.exit(1);

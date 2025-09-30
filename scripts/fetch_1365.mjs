@@ -36,6 +36,11 @@ const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
+// === (추가) 타임아웃 & 속도 제어 ENV ===
+const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 60000); // 60s
+const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350); // 페이지 간 딜레이(ms)
+const SHARD_DELAY_MS     = Number(process.env.SHARD_DELAY_MS || 300);     // 서울 구 샤드 간 딜레이(ms)
+
 // ====== CONSTS ======
 const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
 const EP   = `${BASE}/getVltrSearchWordList`;
@@ -53,7 +58,7 @@ const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128 });
 const AX = axios.create({
   httpAgent, httpsAgent,
   headers: { "Accept-Language":"ko,en;q=0.8", "User-Agent":"Mozilla/5.0" },
-  timeout: 15000,
+  timeout: AXIOS_TIMEOUT_MS, // (수정) 15s -> 환경변수(기본 60s)
   validateStatus: s => s >= 200 && s < 500
 });
 
@@ -73,6 +78,7 @@ const toArray = x => (x ? (Array.isArray(x) ? x : [x]) : []);
 const isYmd = v => typeof v === "string" && /^\d{8}$/.test(v);
 const between = (v, a, b) => (isYmd(v) ? (!a || v >= a) && (!b || v <= b) : false);
 const includesAny = (s, arr) => arr.some(w => w && String(s).includes(w));
+const sleep = ms => new Promise(r => setTimeout(r, ms)); // (추가)
 
 function uniqBy(arr, key){
   const seen = new Set();
@@ -293,6 +299,9 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
 
     // 조기 종료: 충분히 모였으면 페이지 루프 중단(샤드 안)
     if (out.length >= DESIRED_MIN) break;
+
+    // (추가) 페이지 간 딜레이
+    if (LIST_PAGE_DELAY_MS) await sleep(LIST_PAGE_DELAY_MS);
   }
   return out;
 }
@@ -318,6 +327,9 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
       console.log(`  └ ${gu} 누적=${collected.length}`);
 
       if (collected.length >= DESIRED_MIN) break; // 충분히 모이면 샤딩 루프도 중단
+
+      // (추가) 샤드 간 딜레이
+      if (SHARD_DELAY_MS) await sleep(SHARD_DELAY_MS);
     }
     // 보너스: 샤딩 후에도 부족하면 기본(키워드 없음)으로 한 번 더
     if (collected.length < DESIRED_MIN) {
@@ -349,7 +361,7 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   const needDetail = collected.slice(0, MAX_DETAIL);
 
   await Promise.all(needDetail.map(it => limit(async () => {
-    if (DETAIL_DELAY_MS) await new Promise(r=>setTimeout(r, DETAIL_DELAY_MS));
+    if (DETAIL_DELAY_MS) await sleep(DETAIL_DELAY_MS);
     triedDetail++;
     const { recruit, applied } = await fetchDetailCounts(it.progrmRegistNo);
 
@@ -390,7 +402,8 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
       PER, MAX_PAGES, KEYWORD,
       SHARD_GUGUN, DESIRED_MIN,
       DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL,
-      refreshApplied: "always" // 기록용
+      refreshApplied: "always",
+      AXIOS_TIMEOUT_MS, LIST_PAGE_DELAY_MS, SHARD_DELAY_MS // (추가 기록)
     },
     stat: {
       total: collected.length,

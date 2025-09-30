@@ -36,13 +36,13 @@ const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
 const DETAIL_DELAY_MS    = Number(process.env.DETAIL_DELAY_MS || 0);
 const MAX_DETAIL         = Number(process.env.MAX_DETAIL || 999999);
 
-// === (추가) 타임아웃 & 속도 제어 ENV ===
-const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 60000); // 60s
+// === 타임아웃 & 속도 제어 ENV ===
+const AXIOS_TIMEOUT_MS   = Number(process.env.AXIOS_TIMEOUT_MS || 20000); // 20s (짧게 끊고 재시도)
 const LIST_PAGE_DELAY_MS = Number(process.env.LIST_PAGE_DELAY_MS || 350); // 페이지 간 딜레이(ms)
 const SHARD_DELAY_MS     = Number(process.env.SHARD_DELAY_MS || 300);     // 서울 구 샤드 간 딜레이(ms)
 
 // ====== CONSTS ======
-const BASE = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService";
+const BASE = "https://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService"; // https로 변경
 const EP   = `${BASE}/getVltrSearchWordList`;
 
 const today = new Date();
@@ -58,7 +58,7 @@ const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128 });
 const AX = axios.create({
   httpAgent, httpsAgent,
   headers: { "Accept-Language":"ko,en;q=0.8", "User-Agent":"Mozilla/5.0" },
-  timeout: AXIOS_TIMEOUT_MS, // (수정) 15s -> 환경변수(기본 60s)
+  timeout: AXIOS_TIMEOUT_MS, // 20s
   validateStatus: s => s >= 200 && s < 500
 });
 
@@ -78,7 +78,7 @@ const toArray = x => (x ? (Array.isArray(x) ? x : [x]) : []);
 const isYmd = v => typeof v === "string" && /^\d{8}$/.test(v);
 const between = (v, a, b) => (isYmd(v) ? (!a || v >= a) && (!b || v <= b) : false);
 const includesAny = (s, arr) => arr.some(w => w && String(s).includes(w));
-const sleep = ms => new Promise(r => setTimeout(r, ms)); // (추가)
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function uniqBy(arr, key){
   const seen = new Set();
@@ -88,6 +88,25 @@ function uniqBy(arr, key){
     if (!seen.has(k)) { seen.add(k); out.push(it); }
   }
   return out;
+}
+
+// --- 재시도 + 지수 백오프 ---
+async function withRetry(fn, {retries=5, base=700, factor=1.8}={}) {
+  let last;
+  for (let i=0; i<retries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      const retriable =
+        e.code === "ECONNABORTED" || e.code === "ETIMEDOUT" ||
+        e.code === "ECONNRESET"   || e.code === "EAI_AGAIN" ||
+        (e.response && (e.response.status >= 500 || e.response.status === 429));
+      if (!retriable || i === retries-1) { last = e; break; }
+      const backoff = Math.round(base * Math.pow(factor, i)) + Math.floor(Math.random()*250);
+      await sleep(backoff);
+      last = e;
+    }
+  }
+  throw last;
 }
 
 // 숫자만 추출
@@ -156,7 +175,8 @@ const DETAIL_URL = pid =>
   `https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do?type=show&progrmRegistNo=${encodeURIComponent(pid)}`;
 
 async function fetchDetailCounts(pid) {
-  const { data, status } = await AX.get(DETAIL_URL(pid), { responseType: "text" });
+  const res = await withRetry(() => AX.get(DETAIL_URL(pid), { responseType: "text" }));
+  const { data, status } = res;
   if (status >= 400) return { recruit: "", applied: "" };
   return extractCounts(data);
 }
@@ -232,8 +252,9 @@ function writeCache(pid, { recruit, applied, touchedApplied=false }) {
 async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" } = {}){
   const out = [];
   for (let page = pageStart; page <= pageStop; page++){
+    const per = Math.min(Number(PER || 100), 50); // 서버 부담 완화 (최대 50)
     const qs = new URLSearchParams({
-      numOfRows: String(PER),
+      numOfRows: String(per),
       pageNo: String(page),
       _type: "json"
     });
@@ -244,12 +265,20 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
     }
     const kwAll = [KEYWORD, extraKeyword].filter(Boolean).join(" ").trim();
     if (kwAll) qs.set("keyword", kwAll);
-    if (SIDO_CODE) qs.set("sidoCd", SIDO_CODE);
-    if (GUGUN_CODE) qs.set("gugunCd", GUGUN_CODE);
+    if (SIDO_CODE) {
+      qs.set("sidoCd", SIDO_CODE);   // 호환
+      qs.set("schSido", SIDO_CODE);  // 문서상 서버 필터
+    }
+    if (GUGUN_CODE) {
+      qs.set("gugunCd", GUGUN_CODE);
+      qs.set("schSign1", GUGUN_CODE); // 문서상 서버 필터
+    }
     if (PROGRM_STTUS_SE) qs.set("progrmSttusSe", PROGRM_STTUS_SE);
 
     const url = `${EP}?serviceKey=${SERVICE_KEY}&${qs.toString()}`;
-    const { data, headers, status } = await AX.get(url, { transformResponse: [d=>d] });
+    const { data, headers, status } = await withRetry(
+      () => AX.get(url, { transformResponse: [d=>d] })
+    );
     if (status >= 400) throw new Error(`HTTP ${status}. Body: ${String(data).slice(0,200)}`);
 
     const body  = await parseBody(data, headers);
@@ -300,7 +329,7 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
     // 조기 종료: 충분히 모였으면 페이지 루프 중단(샤드 안)
     if (out.length >= DESIRED_MIN) break;
 
-    // (추가) 페이지 간 딜레이
+    // 페이지 간 딜레이
     if (LIST_PAGE_DELAY_MS) await sleep(LIST_PAGE_DELAY_MS);
   }
   return out;
@@ -328,7 +357,7 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
 
       if (collected.length >= DESIRED_MIN) break; // 충분히 모이면 샤딩 루프도 중단
 
-      // (추가) 샤드 간 딜레이
+      // 샤드 간 딜레이
       if (SHARD_DELAY_MS) await sleep(SHARD_DELAY_MS);
     }
     // 보너스: 샤딩 후에도 부족하면 기본(키워드 없음)으로 한 번 더
@@ -403,7 +432,7 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
       SHARD_GUGUN, DESIRED_MIN,
       DETAIL_CONCURRENCY, DETAIL_DELAY_MS, MAX_DETAIL,
       refreshApplied: "always",
-      AXIOS_TIMEOUT_MS, LIST_PAGE_DELAY_MS, SHARD_DELAY_MS // (추가 기록)
+      AXIOS_TIMEOUT_MS, LIST_PAGE_DELAY_MS, SHARD_DELAY_MS
     },
     stat: {
       total: collected.length,
@@ -421,6 +450,14 @@ async function fetchListOnce({ pageStart=1, pageStop=MAX_PAGES, extraKeyword="" 
   console.log(`   ▶ 모집인원 채움: API/CACHE=${filledApiRecruit}, 상세=${filledDetailRecruit}, 미확인=${stillEmptyRecruit}`);
   console.log(`   ▶ 신청인원 채움(항상 상세): 상세=${filledDetailApplied}, 미확인=${stillEmptyApplied}`);
 })().catch(e => {
+  // 에러 타입별 로그 보강
+  if (e.code === "ECONNABORTED") {
+    console.error(`[TIMEOUT] exceeded ${AXIOS_TIMEOUT_MS}ms`);
+  } else if (e.response) {
+    console.error(`[HTTP ${e.response.status}] ${e.response.config?.url}`);
+  } else {
+    console.error(`[NETWORK] ${e.code || e.message}`);
+  }
   console.error(e);
   process.exit(1);
 });

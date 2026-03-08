@@ -9,7 +9,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: write
     concurrency:
@@ -22,12 +22,13 @@ jobs:
       H1365_SERVICE_KEY: ${{ secrets.H1365_SERVICE_KEY }}
       H1365_PAGE_SIZE: "100"
       H1365_MAX_PAGES: "50"
+      H1365_MAX_ITEMS: "2000"
       H1365_SIDO_CODE: "6110000"
       H1365_SHARD_SEOUL_DISTRICTS: "true"
       H1365_RECRUITING_ONLY: "true"
       H1365_ENRICH_DETAIL_COUNTS: "true"
       H1365_DETAIL_CONCURRENCY: "12"
-      H1365_MAX_DETAIL: "300"
+      H1365_MAX_DETAIL: "all"
       H1365_REQUEST_TIMEOUT_SECONDS: "20"
       ENABLE_DB_SYNC: "false"
 

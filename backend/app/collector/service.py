@@ -17,6 +17,7 @@ from app.collector.repository import upsert_records
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+UNLIMITED_VALUES = {"0", "all", "none", "unlimited", "full"}
 LIST_ENDPOINT = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService/getVltrSearchWordList"
 DETAIL_ENDPOINT = "https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do"
 SEOUL_SIDO_CODE = "6110000"
@@ -38,6 +39,7 @@ class CollectorSettings:
     service_key: str
     page_size: int = 100
     max_pages: int = 50
+    max_items: int | None = None
     keyword: str = ""
     sido_code: str | None = None
     gugun_code: str | None = None
@@ -56,10 +58,18 @@ class CollectorSettings:
             raise ValueError("H1365_SERVICE_KEY is required for live collection")
 
         max_detail_raw = os.getenv("H1365_MAX_DETAIL", "").strip()
+        max_items_raw = os.getenv("H1365_MAX_ITEMS", "").strip()
+        max_detail: int | None
+        if max_detail_raw.lower() in UNLIMITED_VALUES:
+            max_detail = None
+        else:
+            max_detail = int(max_detail_raw) if max_detail_raw else 300
+        max_items = int(max_items_raw) if max_items_raw else None
         return cls(
             service_key=service_key,
             page_size=int(os.getenv("H1365_PAGE_SIZE", "100")),
             max_pages=int(os.getenv("H1365_MAX_PAGES", "50")),
+            max_items=max_items,
             keyword=os.getenv("H1365_KEYWORD", "").strip(),
             sido_code=os.getenv("H1365_SIDO_CODE", "").strip() or None,
             gugun_code=os.getenv("H1365_GUGUN_CODE", "").strip() or None,
@@ -68,7 +78,7 @@ class CollectorSettings:
             recruiting_only=os.getenv("H1365_RECRUITING_ONLY", "true").lower() in TRUE_VALUES,
             enrich_detail_counts=os.getenv("H1365_ENRICH_DETAIL_COUNTS", "true").lower() in TRUE_VALUES,
             detail_concurrency=int(os.getenv("H1365_DETAIL_CONCURRENCY", "12")),
-            max_detail=int(max_detail_raw) if max_detail_raw else 300,
+            max_detail=max_detail,
             request_timeout_seconds=float(os.getenv("H1365_REQUEST_TIMEOUT_SECONDS", "20")),
         )
 
@@ -291,6 +301,8 @@ async def _collect_raw_items_for_keyword(
             seen_ids.add(source_post_id)
             item.setdefault("aplyNmpr", "")
             collected.append(item)
+            if settings.max_items is not None and len(collected) >= settings.max_items:
+                return collected
     return collected
 
 
@@ -306,6 +318,8 @@ async def _collect_raw_items(client: Volunteer1365Client, settings: CollectorSet
                     continue
                 seen_ids.add(source_post_id)
                 merged.append(item)
+                if settings.max_items is not None and len(merged) >= settings.max_items:
+                    return merged
         return merged
     return await _collect_raw_items_for_keyword(client, settings)
 

@@ -53,7 +53,7 @@ async function loadHeroUpdate() {
     if (!formatted) {
       throw new Error("updatedAt missing");
     }
-    heroUpdate.textContent = `최근 업데이트: ${formatted} (하루 1회 자동갱신)`;
+    heroUpdate.textContent = `최근 업데이트: ${formatted} (6시간마다 자동갱신)`;
   } catch {
     heroUpdate.textContent = "최근 업데이트 정보를 확인하지 못했습니다.";
   }

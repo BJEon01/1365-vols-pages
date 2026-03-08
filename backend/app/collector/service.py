@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -21,6 +21,7 @@ UNLIMITED_VALUES = {"0", "all", "none", "unlimited", "full"}
 LIST_ENDPOINT = "http://openapi.1365.go.kr/openapi/service/rest/VolunteerPartcptnService/getVltrSearchWordList"
 DETAIL_ENDPOINT = "https://www.1365.go.kr/vols/P9210/partcptn/timeCptn.do"
 SEOUL_SIDO_CODE = "6110000"
+DEFAULT_DETAIL_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "detail_cache.json"
 
 RECRUIT_LABELS = (
     "\uBAA8\uC9D1\\s*\uC778\uC6D0",
@@ -49,6 +50,8 @@ class CollectorSettings:
     enrich_detail_counts: bool = True
     detail_concurrency: int = 12
     max_detail: int | None = 300
+    detail_cache_path: Path | None = DEFAULT_DETAIL_CACHE_PATH
+    detail_cache_ttl_hours: float = 72.0
     request_timeout_seconds: float = 20.0
 
     @classmethod
@@ -59,6 +62,7 @@ class CollectorSettings:
 
         max_detail_raw = os.getenv("H1365_MAX_DETAIL", "").strip()
         max_items_raw = os.getenv("H1365_MAX_ITEMS", "").strip()
+        detail_cache_path_raw = os.getenv("H1365_DETAIL_CACHE_PATH", "").strip()
         max_detail: int | None
         if max_detail_raw.lower() in UNLIMITED_VALUES:
             max_detail = None
@@ -79,6 +83,12 @@ class CollectorSettings:
             enrich_detail_counts=os.getenv("H1365_ENRICH_DETAIL_COUNTS", "true").lower() in TRUE_VALUES,
             detail_concurrency=int(os.getenv("H1365_DETAIL_CONCURRENCY", "12")),
             max_detail=max_detail,
+            detail_cache_path=(
+                Path(detail_cache_path_raw)
+                if detail_cache_path_raw
+                else DEFAULT_DETAIL_CACHE_PATH
+            ),
+            detail_cache_ttl_hours=float(os.getenv("H1365_DETAIL_CACHE_TTL_HOURS", "72")),
             request_timeout_seconds=float(os.getenv("H1365_REQUEST_TIMEOUT_SECONDS", "20")),
         )
 
@@ -124,6 +134,48 @@ def export_records_to_json(records: list[dict[str, object]], output_path: str | 
     }
     export_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return export_path
+
+
+def _load_detail_cache(cache_path: Path | None) -> dict[str, dict[str, str]]:
+    if cache_path is None or not cache_path.exists():
+        return {}
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    loaded: dict[str, dict[str, str]] = {}
+    for key, value in payload.items():
+        if not isinstance(value, dict):
+            continue
+        loaded[str(key)] = {
+            "recruit": str(value.get("recruit") or "").strip(),
+            "applied": str(value.get("applied") or "").strip(),
+            "fetchedAt": str(value.get("fetchedAt") or "").strip(),
+        }
+    return loaded
+
+
+def _write_detail_cache(cache_path: Path | None, cache: dict[str, dict[str, str]]) -> None:
+    if cache_path is None:
+        return
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _cache_is_fresh(entry: dict[str, str], ttl_hours: float) -> bool:
+    fetched_at_raw = entry.get("fetchedAt") or ""
+    if not fetched_at_raw:
+        return False
+    try:
+        fetched_at = datetime.fromisoformat(fetched_at_raw)
+    except ValueError:
+        return False
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - fetched_at <= timedelta(hours=ttl_hours)
 
 
 def _to_list(value: Any) -> list[Any]:
@@ -330,17 +382,32 @@ async def _enrich_detail_counts(
     *,
     concurrency: int,
     max_detail: int | None,
+    cache_path: Path | None,
+    cache_ttl_hours: float,
 ) -> tuple[int, int, int]:
     detail_targets = items[:max_detail] if max_detail is not None else items
     semaphore = asyncio.Semaphore(max(1, concurrency))
     recruit_updates = 0
     applied_updates = 0
+    detail_cache = _load_detail_cache(cache_path)
 
     async def enrich(item: dict[str, object]) -> None:
         nonlocal recruit_updates, applied_updates
         source_post_id = str(item.get("progrmRegistNo") or "").strip()
         if not source_post_id:
             return
+
+        cache_entry = detail_cache.get(source_post_id)
+        if cache_entry:
+            cached_recruit = cache_entry.get("recruit") or ""
+            cached_applied = cache_entry.get("applied") or ""
+            if cached_recruit and not str(item.get("rcritNmpr") or "").strip():
+                item["rcritNmpr"] = cached_recruit
+            if cached_applied and not str(item.get("aplyNmpr") or "").strip():
+                item["aplyNmpr"] = cached_applied
+            if cached_recruit and cached_applied and _cache_is_fresh(cache_entry, cache_ttl_hours):
+                return
+
         try:
             async with semaphore:
                 recruit_value, applied_value = await client.fetch_detail_counts(source_post_id)
@@ -354,7 +421,14 @@ async def _enrich_detail_counts(
             item["aplyNmpr"] = applied_value
             applied_updates += 1
 
+        detail_cache[source_post_id] = {
+            "recruit": str(item.get("rcritNmpr") or "").strip(),
+            "applied": str(item.get("aplyNmpr") or "").strip(),
+            "fetchedAt": datetime.now(timezone.utc).isoformat(),
+        }
+
     await asyncio.gather(*(enrich(item) for item in detail_targets))
+    _write_detail_cache(cache_path, detail_cache)
     return len(detail_targets), recruit_updates, applied_updates
 
 
@@ -376,6 +450,8 @@ async def sync_live_posts(
                 raw_items,
                 concurrency=settings.detail_concurrency,
                 max_detail=settings.max_detail,
+                cache_path=settings.detail_cache_path,
+                cache_ttl_hours=settings.detail_cache_ttl_hours,
             )
 
     normalized_records = [normalize_record(item) for item in raw_items]

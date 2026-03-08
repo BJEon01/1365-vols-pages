@@ -1,5 +1,7 @@
 # 1365 Volunteer Explorer
 
+링크 : https://bjeon01.github.io/1365-vols-pages/
+
 FastAPI + PostgreSQL 기반 1365 봉사 공고 탐색 프로젝트입니다.
 
 현재 구조:

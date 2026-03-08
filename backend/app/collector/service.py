@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 import json
 import os
 from pathlib import Path
@@ -51,7 +51,6 @@ class CollectorSettings:
     detail_concurrency: int = 12
     max_detail: int | None = 300
     detail_cache_path: Path | None = DEFAULT_DETAIL_CACHE_PATH
-    detail_cache_ttl_hours: float = 72.0
     request_timeout_seconds: float = 20.0
 
     @classmethod
@@ -88,7 +87,6 @@ class CollectorSettings:
                 if detail_cache_path_raw
                 else DEFAULT_DETAIL_CACHE_PATH
             ),
-            detail_cache_ttl_hours=float(os.getenv("H1365_DETAIL_CACHE_TTL_HOURS", "72")),
             request_timeout_seconds=float(os.getenv("H1365_REQUEST_TIMEOUT_SECONDS", "20")),
         )
 
@@ -163,19 +161,6 @@ def _write_detail_cache(cache_path: Path | None, cache: dict[str, dict[str, str]
         return
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _cache_is_fresh(entry: dict[str, str], ttl_hours: float) -> bool:
-    fetched_at_raw = entry.get("fetchedAt") or ""
-    if not fetched_at_raw:
-        return False
-    try:
-        fetched_at = datetime.fromisoformat(fetched_at_raw)
-    except ValueError:
-        return False
-    if fetched_at.tzinfo is None:
-        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - fetched_at <= timedelta(hours=ttl_hours)
 
 
 def _to_list(value: Any) -> list[Any]:
@@ -383,7 +368,6 @@ async def _enrich_detail_counts(
     concurrency: int,
     max_detail: int | None,
     cache_path: Path | None,
-    cache_ttl_hours: float,
 ) -> tuple[int, int, int]:
     detail_targets = items[:max_detail] if max_detail is not None else items
     semaphore = asyncio.Semaphore(max(1, concurrency))
@@ -400,13 +384,8 @@ async def _enrich_detail_counts(
         cache_entry = detail_cache.get(source_post_id)
         if cache_entry:
             cached_recruit = cache_entry.get("recruit") or ""
-            cached_applied = cache_entry.get("applied") or ""
             if cached_recruit and not str(item.get("rcritNmpr") or "").strip():
                 item["rcritNmpr"] = cached_recruit
-            if cached_applied and not str(item.get("aplyNmpr") or "").strip():
-                item["aplyNmpr"] = cached_applied
-            if cached_recruit and cached_applied and _cache_is_fresh(cache_entry, cache_ttl_hours):
-                return
 
         try:
             async with semaphore:
@@ -451,7 +430,6 @@ async def sync_live_posts(
                 concurrency=settings.detail_concurrency,
                 max_detail=settings.max_detail,
                 cache_path=settings.detail_cache_path,
-                cache_ttl_hours=settings.detail_cache_ttl_hours,
             )
 
     normalized_records = [normalize_record(item) for item in raw_items]

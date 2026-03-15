@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+import html as html_lib
 import json
 import os
 from pathlib import Path
@@ -111,18 +112,82 @@ def _serialize_value(value: object) -> object:
     return value
 
 
+def _load_existing_export_items(output_path: Path) -> dict[str, dict[str, object]]:
+    if not output_path.exists():
+        return {}
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return {}
+
+    existing: dict[str, dict[str, object]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source_post_id = str(item.get("source_post_id") or item.get("id") or "").strip()
+        if not source_post_id:
+            continue
+        existing[source_post_id] = item
+    return existing
+
+
+def _merge_existing_ai_fields(
+    serialized: dict[str, object],
+    existing_item: dict[str, object] | None,
+) -> dict[str, object]:
+    if not existing_item:
+        return serialized
+
+    merged = dict(serialized)
+    merged["id"] = existing_item.get("id") or merged.get("id")
+    merged["created_at"] = existing_item.get("created_at") or merged.get("created_at")
+
+    existing_summary = str(existing_item.get("summary") or "").strip()
+    if existing_summary and not str(merged.get("summary") or "").strip():
+        merged["summary"] = existing_summary
+
+    existing_tags = existing_item.get("tags")
+    if isinstance(existing_tags, list) and existing_tags and not merged.get("tags"):
+        merged["tags"] = existing_tags
+
+    existing_similar_post_ids = existing_item.get("similar_post_ids")
+    if (
+        isinstance(existing_similar_post_ids, list)
+        and existing_similar_post_ids
+        and not merged.get("similar_post_ids")
+    ):
+        merged["similar_post_ids"] = existing_similar_post_ids
+
+    for field_name in ("description", "target_text", "activity_type"):
+        existing_value = str(existing_item.get(field_name) or "").strip()
+        if existing_value and not str(merged.get(field_name) or "").strip():
+            merged[field_name] = existing_value
+
+    return merged
+
+
 def export_records_to_json(records: list[dict[str, object]], output_path: str | os.PathLike[str]) -> Path:
     export_path = Path(output_path)
     export_path.parent.mkdir(parents=True, exist_ok=True)
     exported_at = datetime.now(timezone.utc).isoformat()
+    existing_items = _load_existing_export_items(export_path)
 
     items: list[dict[str, object]] = []
     for record in records:
         serialized = {key: _serialize_value(value) for key, value in record.items()}
-        serialized.setdefault("id", str(serialized.get("source_post_id") or ""))
+        source_post_id = str(serialized.get("source_post_id") or "").strip()
+        serialized.setdefault("id", source_post_id)
         serialized.setdefault("collected_at", exported_at)
         serialized.setdefault("created_at", exported_at)
-        serialized.setdefault("updated_at", exported_at)
+        serialized["updated_at"] = exported_at
+        serialized.setdefault("summary", None)
+        serialized.setdefault("tags", [])
+        serialized.setdefault("similar_post_ids", [])
+        serialized = _merge_existing_ai_fields(serialized, existing_items.get(source_post_id))
         items.append(serialized)
 
     payload = {
@@ -228,6 +293,55 @@ def _extract_detail_counts(html: str) -> tuple[str, str]:
     return recruit, applied
 
 
+def _clean_html_text(value: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\r\n?", "\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s+\n", "\n\n", text)
+    return text.strip()
+
+
+def _extract_labeled_html_text(html: str, label: str) -> str:
+    patterns = (
+        rf"<dt[^>]*>\s*{label}\s*</dt>\s*<dd[^>]*>([\s\S]*?)</dd>",
+        rf"<th[^>]*>\s*{label}\s*</th>\s*<td[^>]*>([\s\S]*?)</td>",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if not match:
+            continue
+        cleaned = _clean_html_text(match.group(1))
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _extract_description_text(html: str) -> str:
+    patterns = (
+        r'<div[^>]+class="[^"]*board_body[^"]*"[\s\S]*?<div[^>]+class="[^"]*bb_txt[^"]*"[\s\S]*?<pre[^>]*>([\s\S]*?)</pre>',
+        r"<pre[^>]*>([\s\S]*?)</pre>",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if not match:
+            continue
+        cleaned = _clean_html_text(match.group(1))
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _extract_detail_fields(html: str) -> tuple[str, str, str, str, str]:
+    recruit, applied = _extract_detail_counts(html)
+    description = _extract_description_text(html)
+    target_text = _extract_labeled_html_text(html, "봉사대상")
+    activity_type = _extract_labeled_html_text(html, "활동구분")
+    return recruit, applied, description, target_text, activity_type
+
+
 def _parse_body(text: str, content_type: str) -> tuple[list[dict[str, object]], int]:
     stripped = text.strip()
     if "json" in content_type.lower() or stripped.startswith("{"):
@@ -302,7 +416,7 @@ class Volunteer1365Client:
         response.raise_for_status()
         return _parse_body(response.text, response.headers.get("content-type", ""))
 
-    async def fetch_detail_counts(self, source_post_id: str) -> tuple[str, str]:
+    async def fetch_detail_fields(self, source_post_id: str) -> tuple[str, str, str, str, str]:
         response = await self._client.get(
             DETAIL_ENDPOINT,
             params={
@@ -311,7 +425,7 @@ class Volunteer1365Client:
             },
         )
         response.raise_for_status()
-        return _extract_detail_counts(response.text)
+        return _extract_detail_fields(response.text)
 
 
 async def _collect_raw_items_for_keyword(
@@ -387,9 +501,15 @@ async def _enrich_detail_counts(
             if cached_recruit and not str(item.get("rcritNmpr") or "").strip():
                 item["rcritNmpr"] = cached_recruit
 
+        existing_description = str(item.get("descriptionText") or "").strip()
+        existing_target_text = str(item.get("targetText") or "").strip()
+        existing_activity_type = str(item.get("activityType") or "").strip()
+
         try:
             async with semaphore:
-                recruit_value, applied_value = await client.fetch_detail_counts(source_post_id)
+                recruit_value, applied_value, description_text, target_text, activity_type = (
+                    await client.fetch_detail_fields(source_post_id)
+                )
         except Exception:
             return
 
@@ -399,6 +519,18 @@ async def _enrich_detail_counts(
         if applied_value:
             item["aplyNmpr"] = applied_value
             applied_updates += 1
+        if description_text:
+            item["descriptionText"] = description_text
+        elif existing_description:
+            item["descriptionText"] = existing_description
+        if target_text:
+            item["targetText"] = target_text
+        elif existing_target_text:
+            item["targetText"] = existing_target_text
+        if activity_type:
+            item["activityType"] = activity_type
+        elif existing_activity_type:
+            item["activityType"] = existing_activity_type
 
         detail_cache[source_post_id] = {
             "recruit": str(item.get("rcritNmpr") or "").strip(),

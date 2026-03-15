@@ -583,6 +583,81 @@ button:hover {
   gap: 16px;
 }
 
+.detail-section {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.detail-summary {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.7;
+  white-space: pre-line;
+}
+
+.detail-placeholder {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f5f7fb;
+  border: 1px solid var(--line);
+  color: #23384c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.similar-list {
+  display: grid;
+  gap: 10px;
+}
+
+.similar-item-button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  text-align: left;
+}
+
+.similar-item-button strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.similar-item-button span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.similar-item-button:hover {
+  border-color: #9bb8d7;
+  background: #f8fbff;
+}
+
 .detail-block pre {
   margin: 0;
   padding: 14px;

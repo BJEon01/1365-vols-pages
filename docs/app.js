@@ -1,10 +1,7 @@
-import { createChatTab } from "./chat.js";
 import { createSearchTab } from "./search.js";
 
-const tabButtons = [...document.querySelectorAll(".tab-button")];
 const panels = {
   search: document.querySelector("#searchTabPanel"),
-  chat: document.querySelector("#chatTabPanel"),
 };
 
 const detailDialog = document.querySelector("#detailDialog");
@@ -19,7 +16,6 @@ const searchTab = createSearchTab({
   detailTitle,
   detailBody,
 });
-const chatTab = createChatTab({ root: panels.chat });
 
 function formatUpdatedAt(value) {
   const date = new Date(value);
@@ -44,7 +40,9 @@ function formatUpdatedAt(value) {
 
 async function loadHeroUpdate() {
   try {
-    const response = await fetch("./data/volunteer_posts.json", { cache: "no-store" });
+    const dataUrl = new URL("./data/volunteer_posts.json", window.location.href);
+    dataUrl.searchParams.set("v", String(Date.now()));
+    const response = await fetch(dataUrl.toString(), { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -58,24 +56,6 @@ async function loadHeroUpdate() {
     heroUpdate.textContent = "최근 업데이트 정보를 확인하지 못했습니다.";
   }
 }
-
-function switchTab(name) {
-  tabButtons.forEach((button) => {
-    const active = button.dataset.tab === name;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
-
-  Object.entries(panels).forEach(([key, panel]) => {
-    panel.classList.toggle("is-hidden", key !== name);
-  });
-}
-
-tabButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    switchTab(button.dataset.tab);
-  });
-});
 
 closeDetailButton.addEventListener("click", () => {
   detailDialog.close();
@@ -93,7 +73,5 @@ detailDialog.addEventListener("click", (event) => {
   }
 });
 
-switchTab("search");
 await loadHeroUpdate();
 await searchTab.loadInitial();
-chatTab.refresh();

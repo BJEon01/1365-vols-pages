@@ -31,6 +31,10 @@ jobs:
       H1365_MAX_DETAIL: "all"
       H1365_REQUEST_TIMEOUT_SECONDS: "20"
       ENABLE_DB_SYNC: "false"
+      SIMILAR_TOP_K: "20"
+      SIMILAR_BATCH_SIZE: "64"
+      HF_HOME: ${{ github.workspace }}/.hf-cache
+      SENTENCE_TRANSFORMERS_HOME: ${{ github.workspace }}/.hf-cache/sentence-transformers
 
     steps:
       - name: Checkout
@@ -43,6 +47,14 @@ jobs:
           cache: "pip"
           cache-dependency-path: backend/requirements.txt
 
+      - name: Cache embedding models
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf-cache
+          key: ${{ runner.os }}-hf-${{ env.SIMILAR_TOP_K }}-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-hf-
+
       - name: Validate required secrets
         run: |
           test -n "$H1365_SERVICE_KEY" || (echo "H1365_SERVICE_KEY secret is missing" && exit 1)
@@ -54,6 +66,9 @@ jobs:
 
       - name: Run live sync
         run: python scripts/sync_1365.py
+
+      - name: Generate similar posts
+        run: python scripts/generate_similar_posts.py
 
       - name: Commit updated JSON
         working-directory: .

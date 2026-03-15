@@ -1,4 +1,4 @@
-import { fetchJson } from "./api.js";
+import { fetchJson, matchesStaticFilters } from "./api.js";
 
 const SORT_OPTIONS = [
   { value: "recruit_end_date_asc", label: "모집 마감 빠른 순" },
@@ -42,6 +42,20 @@ function formatLocation(item) {
   return [item.province, item.city_district, item.place_text].filter(Boolean).join(" / ") || "-";
 }
 
+function formatRegion(item) {
+  return [item.province, item.city_district].filter(Boolean).join(" / ") || "-";
+}
+
+function formatCompactSimilarMeta(item) {
+  const metaParts = [
+    formatRegion(item),
+    formatDateRange(item.volunteer_date_start, item.volunteer_date_end),
+    formatTimeRange(item.start_time, item.end_time, item.time_text),
+    `모집 ${item.recruit_count ?? "-"} / 신청 ${item.applied_count ?? "-"}`,
+  ];
+  return metaParts.filter(Boolean).join(" · ");
+}
+
 function buildSummaryText(state) {
   if (state.loading) {
     return "공고를 불러오는 중입니다.";
@@ -74,7 +88,24 @@ function tableRowHtml(item, index) {
   `;
 }
 
-function detailHtml(item) {
+function detailHtml(item, similarItems = []) {
+  const similarContent = similarItems.length
+    ? `
+      <div class="similar-list">
+        ${similarItems
+          .map(
+            (similarItem) => `
+              <button type="button" class="similar-item-button" data-similar-id="${escapeHtml(similarItem.id)}">
+                <strong>${escapeHtml(similarItem.title)}</strong>
+                <span>${escapeHtml(formatCompactSimilarMeta(similarItem))}</span>
+              </button>
+            `
+          )
+          .join("")}
+      </div>
+    `
+    : `<p class="detail-placeholder">현재 검색조건에 맞는 비슷한 봉사가 없습니다.</p>`;
+
   return `
     <div class="detail-stack">
       <section class="detail-grid">
@@ -109,12 +140,19 @@ function detailHtml(item) {
           <span class="meta-value"><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">${escapeHtml(item.source_url)}</a></span>
         </div>
       </section>
+      <section class="detail-section">
+        <h3 class="detail-section-title">비슷한 봉사 추천</h3>
+        ${similarContent}
+      </section>
     </div>
   `;
 }
 
 function showDialog(dialog) {
   if (typeof dialog.showModal === "function") {
+    if (dialog.open) {
+      return;
+    }
     dialog.showModal();
     return;
   }
@@ -346,14 +384,42 @@ export function createSearchTab({ root, detailDialog, detailTitle, detailBody })
     }
   }
 
+  function currentSearchParams() {
+    return {
+      keyword: state.keyword,
+      province: state.province,
+      city_district: state.cityDistrict,
+      min_recruit_count: state.minRecruitCount,
+      date_from: state.dateFrom,
+      date_to: state.dateTo,
+    };
+  }
+
   async function openDetail(postId) {
     detailTitle.textContent = "공고 상세";
     detailBody.innerHTML = `<div class="empty-state">상세 정보를 불러오는 중입니다.</div>`;
     showDialog(detailDialog);
     try {
       const item = await fetchJson(`/api/posts/${postId}`);
+      const similarIds = Array.isArray(item.similar_post_ids) ? item.similar_post_ids.slice(0, 20) : [];
+      const rawSimilarItems = (
+        await Promise.all(
+          similarIds.map((similarId) =>
+            fetchJson(`/api/posts/${similarId}`).catch(() => null)
+          )
+        )
+      ).filter(Boolean);
+      const similarItems = rawSimilarItems
+        .filter((similarItem) => String(similarItem.id) !== String(item.id))
+        .filter((similarItem) => matchesStaticFilters(similarItem, currentSearchParams()))
+        .slice(0, 5);
       detailTitle.textContent = item.title || "공고 상세";
-      detailBody.innerHTML = detailHtml(item);
+      detailBody.innerHTML = detailHtml(item, similarItems);
+      detailBody.querySelectorAll("[data-similar-id]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          await openDetail(button.dataset.similarId);
+        });
+      });
     } catch (error) {
       detailBody.innerHTML = `<div class="error-state">상세 조회에 실패했습니다. ${escapeHtml(error.message)}</div>`;
     }

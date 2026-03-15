@@ -185,36 +185,38 @@ function matchesDateTo(item, dateTo) {
   return !item.volunteer_date_start || item.volunteer_date_start <= dateTo;
 }
 
+export function matchesStaticFilters(item, params = {}) {
+  if (item.recruit_count === null || item.recruit_count === undefined) {
+    return false;
+  }
+  if (item.applied_count === null || item.applied_count === undefined) {
+    return false;
+  }
+  if (!matchesKeyword(item, params.keyword)) {
+    return false;
+  }
+  if (!matchesProvince(item, params.province)) {
+    return false;
+  }
+  if (!matchesCityDistrict(item, params.city_district)) {
+    return false;
+  }
+  if (params.min_recruit_count !== undefined && params.min_recruit_count !== null && params.min_recruit_count !== "") {
+    if (Number(item.recruit_count || 0) < Number(params.min_recruit_count)) {
+      return false;
+    }
+  }
+  if (!matchesDateFrom(item, params.date_from)) {
+    return false;
+  }
+  if (!matchesDateTo(item, params.date_to)) {
+    return false;
+  }
+  return true;
+}
+
 function applyStaticFilters(items, params = {}) {
-  return items.filter((item) => {
-    if (item.recruit_count === null || item.recruit_count === undefined) {
-      return false;
-    }
-    if (item.applied_count === null || item.applied_count === undefined) {
-      return false;
-    }
-    if (!matchesKeyword(item, params.keyword)) {
-      return false;
-    }
-    if (!matchesProvince(item, params.province)) {
-      return false;
-    }
-    if (!matchesCityDistrict(item, params.city_district)) {
-      return false;
-    }
-    if (params.min_recruit_count !== undefined && params.min_recruit_count !== null && params.min_recruit_count !== "") {
-      if (Number(item.recruit_count || 0) < Number(params.min_recruit_count)) {
-        return false;
-      }
-    }
-    if (!matchesDateFrom(item, params.date_from)) {
-      return false;
-    }
-    if (!matchesDateTo(item, params.date_to)) {
-      return false;
-    }
-    return true;
-  });
+  return items.filter((item) => matchesStaticFilters(item, params));
 }
 
 function sortStaticItems(items, sort = "recruit_end_date_asc") {
@@ -244,7 +246,9 @@ function sortStaticItems(items, sort = "recruit_end_date_asc") {
 
 async function loadStaticData() {
   if (!staticDataPromise) {
-    staticDataPromise = fetch(STATIC_DATA_PATH).then(async (response) => {
+    const staticUrl = new URL(STATIC_DATA_PATH, window.location.href);
+    staticUrl.searchParams.set("v", String(Date.now()));
+    staticDataPromise = fetch(staticUrl.toString(), { cache: "no-store" }).then(async (response) => {
       if (!response.ok) {
         throw new Error(`정적 JSON을 불러오지 못했습니다. HTTP ${response.status}`);
       }

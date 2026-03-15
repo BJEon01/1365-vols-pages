@@ -6,3 +6,8 @@ pydantic
 alembic
 httpx
 python-dotenv
+langchain-core
+langchain-openai
+tqdm
+sentence-transformers
+numpy

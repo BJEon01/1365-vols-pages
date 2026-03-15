@@ -74,7 +74,8 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to query Ollama. Make sure Ollama is running."
   }
-  if ($ollamaList -notmatch [regex]::Escape($ModelName)) {
+  $ollamaListText = ($ollamaList | Out-String)
+  if (-not ($ollamaListText -match "(?m)^\s*$([regex]::Escape($ModelName))\s")) {
     throw "Ollama model '$ModelName' is missing. Run: ollama pull $ModelName"
   }
 

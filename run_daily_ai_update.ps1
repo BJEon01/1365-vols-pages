@@ -51,6 +51,7 @@ function Invoke-GitChecked {
 Write-Host "[1/6] Checking local workspace..."
 Push-Location $RepoRoot
 try {
+  Write-Host "  - checking git status"
   $status = git status --porcelain
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to read git status"
@@ -59,17 +60,20 @@ try {
     throw "Working tree is not clean. Commit or stash your changes first."
   }
 
+  Write-Host "  - locating Ollama"
   $ollamaExe = Get-OllamaExecutable
   if (-not $ollamaExe) {
     throw "Ollama is not installed or not on PATH."
   }
 
+  Write-Host "  - locating conda python"
   $pythonExe = Get-CondaPython
   if (-not $pythonExe) {
     throw "Could not find the Python executable for conda env '$EnvName'."
   }
 
   Write-Host "[2/6] Checking Ollama model..."
+  Write-Host "  - using: $ollamaExe"
   $ollamaList = & $ollamaExe list
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to query Ollama. Make sure Ollama is running."
@@ -78,6 +82,7 @@ try {
   if (-not ($ollamaListText -match "(?m)^\s*$([regex]::Escape($ModelName))\s")) {
     throw "Ollama model '$ModelName' is missing. Run: ollama pull $ModelName"
   }
+  Write-Host "  - model ready: $ModelName"
 
   Write-Host "[3/6] Pulling latest main..."
   Invoke-GitChecked -Arguments @("pull", "--rebase", "origin", "main")
@@ -97,6 +102,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
       throw "AI enrichment failed with exit code $LASTEXITCODE"
     }
+    Write-Host "  - enrichment complete"
   }
   finally {
     Pop-Location

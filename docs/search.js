@@ -56,6 +56,16 @@ function formatCompactSimilarMeta(item) {
   return metaParts.filter(Boolean).join(" · ");
 }
 
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+  return tags
+    .map((tag) => String(tag || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
 function buildSummaryText(state) {
   if (state.loading) {
     return "공고를 불러오는 중입니다.";
@@ -89,6 +99,7 @@ function tableRowHtml(item, index) {
 }
 
 function detailHtml(item, similarItems = []) {
+  const tags = normalizeTags(item.tags);
   const similarContent = similarItems.length
     ? `
       <div class="similar-list">
@@ -139,6 +150,20 @@ function detailHtml(item, similarItems = []) {
           <span class="meta-label">원문 링크</span>
           <span class="meta-value"><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">${escapeHtml(item.source_url)}</a></span>
         </div>
+      </section>
+      <section class="detail-section">
+        <h3 class="detail-section-title">AI 요약</h3>
+        <p class="detail-summary">${escapeHtml(item.summary || "AI 요약을 준비 중입니다.")}</p>
+      </section>
+      <section class="detail-section">
+        <h3 class="detail-section-title">태그</h3>
+        ${
+          tags.length
+            ? `<div class="tag-list">${tags
+                .map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`)
+                .join("")}</div>`
+            : `<p class="detail-placeholder">태그를 준비 중입니다.</p>`
+        }
       </section>
       <section class="detail-section">
         <h3 class="detail-section-title">비슷한 봉사 추천</h3>
@@ -412,7 +437,7 @@ export function createSearchTab({ root, detailDialog, detailTitle, detailBody })
       const similarItems = rawSimilarItems
         .filter((similarItem) => String(similarItem.id) !== String(item.id))
         .filter((similarItem) => matchesStaticFilters(similarItem, currentSearchParams()))
-        .slice(0, 5);
+        .slice(0, 3);
       detailTitle.textContent = item.title || "공고 상세";
       detailBody.innerHTML = detailHtml(item, similarItems);
       detailBody.querySelectorAll("[data-similar-id]").forEach((button) => {

@@ -5,6 +5,24 @@ $BackendDir = Join-Path $RepoRoot "backend"
 $ModelName = "gemma3:4b-it-qat"
 $EnvName = "1365-backend"
 
+function Get-OllamaExecutable {
+  $command = Get-Command ollama -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+
+  $candidates = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
+    "C:\Program Files\Ollama\ollama.exe"
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+  return $null
+}
+
 function Get-CondaPython {
   $candidates = @(
     (Join-Path $env:USERPROFILE "anaconda3\envs\$EnvName\python.exe"),
@@ -41,8 +59,8 @@ try {
     throw "Working tree is not clean. Commit or stash your changes first."
   }
 
-  $ollama = Get-Command ollama -ErrorAction SilentlyContinue
-  if (-not $ollama) {
+  $ollamaExe = Get-OllamaExecutable
+  if (-not $ollamaExe) {
     throw "Ollama is not installed or not on PATH."
   }
 
@@ -52,7 +70,7 @@ try {
   }
 
   Write-Host "[2/6] Checking Ollama model..."
-  $ollamaList = & $ollama.Source list
+  $ollamaList = & $ollamaExe list
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to query Ollama. Make sure Ollama is running."
   }

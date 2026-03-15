@@ -4,6 +4,34 @@ $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir = Join-Path $RepoRoot "backend"
 $ModelName = "gemma3:4b-it-qat"
 $EnvName = "1365-backend"
+$AllowedDirtyPaths = @(
+  "docs/data/volunteer_posts.json",
+  "run_daily_ai_update.ps1",
+  "run_daily_ai_update.cmd",
+  "backend/data/ai_test_output.json"
+)
+
+function Get-DirtyPaths {
+  $statusLines = git status --porcelain
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to read git status"
+  }
+
+  $paths = @()
+  foreach ($line in $statusLines) {
+    if (-not $line) {
+      continue
+    }
+    $pathPart = $line.Substring(3).Trim()
+    if ($pathPart -match " -> ") {
+      $pathPart = ($pathPart -split " -> ")[-1].Trim()
+    }
+    if ($pathPart) {
+      $paths += ($pathPart -replace "\\", "/")
+    }
+  }
+  return $paths
+}
 
 function Get-OllamaExecutable {
   $command = Get-Command ollama -ErrorAction SilentlyContinue
@@ -52,12 +80,13 @@ Write-Host "[1/6] Checking local workspace..."
 Push-Location $RepoRoot
 try {
   Write-Host "  - checking git status"
-  $status = git status --porcelain
-  if ($LASTEXITCODE -ne 0) {
-    throw "Failed to read git status"
-  }
-  if ($status) {
-    throw "Working tree is not clean. Commit or stash your changes first."
+  $dirtyPaths = Get-DirtyPaths
+  if ($dirtyPaths.Count -gt 0) {
+    $blockedPaths = @($dirtyPaths | Where-Object { $_ -notin $AllowedDirtyPaths })
+    if ($blockedPaths.Count -gt 0) {
+      throw "Working tree has unrelated changes: $($blockedPaths -join ', ')"
+    }
+    Write-Host "  - allowed local changes detected: $($dirtyPaths -join ', ')"
   }
 
   Write-Host "  - locating Ollama"
@@ -85,7 +114,7 @@ try {
   Write-Host "  - model ready: $ModelName"
 
   Write-Host "[3/6] Pulling latest main..."
-  Invoke-GitChecked -Arguments @("pull", "--rebase", "origin", "main")
+  Invoke-GitChecked -Arguments @("pull", "--rebase", "--autostash", "origin", "main")
 
   Write-Host "[4/6] Generating summary/tags with Ollama..."
   Push-Location $BackendDir

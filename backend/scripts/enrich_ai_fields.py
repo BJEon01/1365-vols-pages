@@ -21,6 +21,8 @@ def main() -> None:
     summary = asyncio.run(enrich_json_file(settings))
 
     print("AI field enrichment completed")
+    print(f"  provider: {settings.provider}")
+    print(f"  model: {settings.model}")
     print(f"  input json: {settings.input_json_path}")
     print(f"  output json: {summary.output_path}")
     print(f"  total items: {summary.total_items}")

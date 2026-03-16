@@ -1,4 +1,4 @@
-# 1365 Vols Pages
+# 🌱 1365 Vols Pages
 
 🔗 **Live Demo**: https://bjeon01.github.io/1365-vols-pages/
 
@@ -6,13 +6,13 @@
 
 ---
 
-## Overview
+## 📌 Overview
 
 연합 봉사 동아리에서 단체 봉사를 찾을 때, 1365 포털은 모집 인원 기준 검색이 되지 않고 신청 인원도 공고별로 직접 확인해야 해 탐색 비용이 컸습니다. 이 프로젝트는 이러한 불편을 줄이기 위해 서울 지역 1365 공고 데이터를 수집·가공하고, 실제 단체 봉사 탐색에 필요한 조건 중심으로 검색할 수 있는 서비스를 만드는 것을 목표로 했습니다.
 
 ---
 
-## Key Features
+## ✨ Key Features
 
 - 서울 지역 1365 공고 데이터를 수집·가공해 검색용 데이터셋 구성
 - 모집/신청 인원, 지역, 날짜, 키워드 기반 검색 및 정렬 기능 구현
@@ -25,7 +25,7 @@
 
 ---
 
-## What I Built
+## 🛠 What I Built
 
 ### 1. Searchable Volunteer Dataset
 서울 지역 1365 공고 데이터를 수집하고, 검색과 정렬에 바로 활용할 수 있도록 정규화된 데이터셋으로 가공했습니다.
@@ -55,7 +55,7 @@ GitHub Actions를 활용해 공고 수집과 데이터 업데이트가 주기적
 
 ---
 
-## User Flow
+## 🔄 User Flow
 
 ```text
 1365 공고 수집
@@ -73,7 +73,7 @@ GitHub Pages에서 검색 / 상세 조회 / 비교
 
 ---
 
-## Tech Stack
+## 🧰 Tech Stack
 
 ### Frontend
 - HTML
@@ -94,7 +94,7 @@ GitHub Pages에서 검색 / 상세 조회 / 비교
 
 ---
 
-## Project Structure
+## 📂 Project Structure
 
 ```text
 1365-vols-pages/
@@ -118,7 +118,7 @@ GitHub Pages에서 검색 / 상세 조회 / 비교
 
 ---
 
-## Main Screens
+## 🖥 Main Screens
 
 ### 1. Search Page
 - 서울 지역 봉사 공고를 조건별로 검색
@@ -139,7 +139,7 @@ GitHub Pages에서 검색 / 상세 조회 / 비교
 
 ---
 
-## How to Run
+## ▶️ How to Run
 
 ### 1. Clone Repository
 
@@ -159,7 +159,7 @@ python -m http.server 5500
 
 ---
 
-## Future Improvements
+## 🚀 Future Improvements
 
 - 서울 외 지역까지 확장
 - 사용자 맞춤형 추천 기능 추가

@@ -1,32 +1,220 @@
-# 1365 Volunteer Explorer
+# 1365 봉사 공고 검색 서비스
 
-링크 : https://bjeon01.github.io/1365-vols-pages/
+🔗 **Live Demo**: https://bjeon01.github.io/1365-vols-pages/
 
-FastAPI + PostgreSQL 기반 1365 봉사 공고 탐색 프로젝트입니다.
+서울 지역 1365 봉사 공고를 수집·가공해, 모집/신청 인원, 지역, 날짜, 키워드 기준으로 빠르게 검색할 수 있도록 만든 봉사 탐색 서비스입니다. 공고를 더 빠르게 이해하고 이어서 탐색할 수 있도록 로컬 LLM 기반 요약·태그 생성과 유사 공고 추천 기능도 함께 구현했습니다.
 
-현재 구조:
+---
 
-- `docs/`: GitHub Pages용 정적 프론트
-- `backend/`: FastAPI, PostgreSQL 모델, Python 수집기
-- `.github/workflows/fetch.yml`: GitHub Actions live sync
+## Overview
 
-로컬 실행:
+연합 봉사 동아리에서 단체 봉사를 찾을 때, 1365 포털은 모집 인원 기준 검색이 되지 않고 신청 인원도 공고별로 직접 확인해야 해 탐색 비용이 컸습니다. 이 프로젝트는 이러한 불편을 줄이기 위해 서울 지역 1365 공고 데이터를 수집·가공하고, 실제 단체 봉사 탐색에 필요한 조건 중심으로 검색할 수 있는 서비스를 만드는 것을 목표로 했습니다.
 
-```powershell
-cd backend
-conda activate 1365-backend
-uvicorn app.main:app --reload
+---
+
+## Key Features
+
+- 서울 지역 1365 공고 데이터를 수집·가공해 검색용 데이터셋 구성
+- 모집/신청 인원, 지역, 날짜, 키워드 기반 검색 및 정렬 기능 구현
+- 목록 화면에서 핵심 정보를 표 형태로 비교할 수 있는 UI 구성
+- Ollama 기반 **Gemma 4B**를 활용해 공고 `summary`, `tags` 생성
+- 프롬프트 엔지니어링을 통해 모델이 자유 서술형 응답 대신, 공고의 핵심 정보는 `summary` 규칙에 맞게 요약하고 활동 성격은 `tags` 규칙에 맞게 분류하여 **일관된 JSON 포맷으로 생성**하도록 설계
+- **LangChain** 기반 파이프라인으로 요약·태그 생성 및 유사 공고 추천 기능 구현
+- **Hugging Face 임베딩 기반** 유사 공고 추천 기능 구현
+- GitHub Actions 기반 배치 자동화로 공고 수집과 데이터 업데이트를 주기적으로 수행
+
+---
+
+## What I Built
+
+### 1. Searchable Volunteer Dataset
+서울 지역 1365 공고 데이터를 수집하고, 검색과 정렬에 바로 활용할 수 있도록 정규화된 데이터셋으로 가공했습니다.
+
+### 2. Search & Filtering
+다음 조건을 기준으로 봉사 공고를 탐색할 수 있도록 구현했습니다.
+
+- 모집 인원
+- 신청 인원
+- 지역
+- 날짜
+- 키워드
+
+단체 참여 가능 여부를 빠르게 판단할 수 있도록, 실제 봉사 기획 과정에서 필요한 조건들을 중심으로 검색 기능을 설계했습니다.
+
+### 3. Table-based Exploration UI
+목록 화면에서 공고의 핵심 정보를 표 형태로 비교할 수 있도록 구성해, 여러 공고를 빠르게 훑고 후보를 추릴 수 있게 했습니다.
+
+### 4. Local LLM-based Enrichment
+Ollama로 Gemma 4B를 로컬에서 실행해 각 공고에 대해 `summary`, `tags`를 자동 생성했습니다. 프롬프트 엔지니어링을 통해 결과를 정해진 JSON 포맷으로 출력하도록 설계해, 후처리 없이 안정적으로 활용할 수 있도록 구성했습니다.
+
+### 5. Similar Volunteer Recommendation
+LangChain 파이프라인과 Hugging Face 임베딩을 활용해 유사 공고 추천 기능을 구현했습니다. 하나의 공고를 확인한 뒤, 비슷한 성격의 봉사 활동을 이어서 탐색할 수 있도록 설계했습니다.
+
+### 6. Automated Data Pipeline
+GitHub Actions를 활용해 공고 수집과 데이터 업데이트가 주기적으로 이루어지도록 배치 자동화를 구성했습니다. 정적 서비스 형태에서도 최신 공고 데이터를 지속적으로 반영할 수 있도록 했습니다.
+
+---
+
+## User Flow
+
+```text
+1365 공고 수집
+   ↓
+검색 가능한 형태로 데이터 정리
+   ↓
+summary / tags 생성
+   ↓
+유사 공고 계산
+   ↓
+정적 JSON 생성
+   ↓
+GitHub Pages에서 검색 / 상세 조회 / 비교
 ```
 
-GitHub Actions Secrets:
+---
 
-- `DATABASE_URL`
-- `H1365_SERVICE_KEY`
+## Tech Stack
 
-수집 실행:
+### Frontend
+- HTML
+- CSS
+- Vanilla JavaScript
 
-```powershell
-cd backend
-conda activate 1365-backend
-python scripts/sync_1365.py
+### Data / Automation
+- Python
+- GitHub Actions
+- GitHub Pages
+
+### AI / Recommendation
+- Ollama
+- Gemma 4B
+- LangChain
+- Hugging Face Embeddings
+- FAISS
+
+---
+
+## Project Structure
+
+```text
+1365-vols-pages/
+├─ docs/                   # GitHub Pages 정적 프론트
+│  ├─ index.html
+│  ├─ app.js
+│  ├─ api.js
+│  ├─ search.js
+│  ├─ chat.js
+│  └─ data/
+├─ backend/                # 수집, 데이터 가공, 요약/태그 생성, 유사 공고 추천 로직
+│  ├─ app/
+│  ├─ scripts/
+│  └─ data/
+└─ .github/workflows/
+   └─ fetch.yml
 ```
+
+현재 사용자가 접하는 메인 서비스는 **정적 JSON 기반 검색 서비스**입니다.  
+한편 `backend/`에는 공고 수집, 데이터 가공, 요약·태그 생성, 유사 공고 추천 등 현재 서비스 운영에 필요한 데이터 처리 로직이 포함되어 있습니다. DB, API 관련 구조도 일부 포함되어 있지만 현재 프로젝트에서는 보조적인 개발 구조로 두고 있습니다.
+
+---
+
+## Main Screens
+
+### 1. Search Page
+- 서울 지역 봉사 공고를 조건별로 검색
+- 모집 인원, 신청 인원, 지역, 날짜, 키워드 기반 필터링
+- 여러 공고를 표 형태로 빠르게 비교 가능
+
+### 2. Detail Page
+- 공고의 핵심 정보 확인
+- AI 요약 및 태그 제공
+- 비슷한 봉사 공고 추천
+
+> 필요하면 아래처럼 스크린샷을 추가해 사용할 수 있습니다.
+
+```md
+![search-page](./assets/search-page.png)
+![detail-page](./assets/detail-page.png)
+```
+
+---
+
+## Why This Project Matters
+
+이 프로젝트는 단순한 크롤링 실습이 아니라, 실제 사용자의 문제를 출발점으로 삼아 다음 흐름을 하나의 서비스로 연결했다는 점에 의미가 있습니다.
+
+- 데이터 수집
+- 데이터 가공
+- 검색 중심 UI 설계
+- 로컬 LLM 기반 요약/태깅
+- 임베딩 기반 유사 공고 추천
+- 자동 배치 운영
+
+즉, 실제 운영상의 불편을 해결하기 위한 데이터 기반 탐색 서비스를 목표로 기획하고 구현한 프로젝트입니다.
+
+---
+
+## Challenges & Decisions
+
+### 1. 단순 수집이 아니라 탐색 가능한 데이터로 재구성
+공고를 가져오는 것만으로는 실제 사용성이 충분하지 않았습니다. 그래서 모집 인원, 신청 인원, 날짜, 지역 등 사용자가 실제로 비교하는 기준을 중심으로 데이터를 다시 정리했습니다.
+
+### 2. 공고 이해 비용 절감
+공고 원문은 길고 형식이 일정하지 않아, 사용자가 매번 전체 내용을 읽어야 하는 부담이 있었습니다. 이를 줄이기 위해 로컬 LLM 기반 요약과 태그 생성을 붙여 핵심 내용을 빠르게 파악할 수 있도록 했습니다.
+
+### 3. 이어지는 탐색 구조 설계
+봉사 공고는 하나를 본 뒤 비슷한 조건의 다른 공고도 함께 비교하는 경우가 많았습니다. 그래서 임베딩 기반 유사 공고 추천을 추가해 탐색이 자연스럽게 이어지도록 구성했습니다.
+
+### 4. 운영 부담을 줄이는 배포 방식 선택
+실시간 서버 중심 구조보다 먼저 **정적 서비스 + 배치 자동화** 구조로 시작해 운영 복잡도를 줄였습니다. 대신 추후 확장을 고려해 수집 및 처리 로직은 별도 구조로 분리해두었습니다.
+
+---
+
+## How to Run
+
+### 1. Clone Repository
+
+```bash
+git clone https://github.com/BJEon01/1365-vols-pages.git
+cd 1365-vols-pages
+```
+
+### 2. Run Static Frontend
+
+```bash
+cd docs
+python -m http.server 5500
+```
+
+브라우저에서 로컬 서버 주소로 접속하면 정적 페이지를 확인할 수 있습니다.
+
+---
+
+## Automation
+
+GitHub Actions를 활용해 공고 수집과 데이터 업데이트가 주기적으로 이루어지도록 구성했습니다.
+
+주요 흐름은 다음과 같습니다.
+
+1. 1365 공고 수집
+2. 상세 정보 보강
+3. `summary`, `tags` 생성
+4. 유사 공고 계산
+5. 정적 JSON 갱신
+6. GitHub Pages에서 최신 데이터 반영
+
+---
+
+## Future Improvements
+
+- 서울 외 지역까지 확장
+- 사용자 맞춤형 추천 기능 추가
+- 챗 기반 탐색 UI 고도화
+- 즐겨찾기, 일정 관리 등 사용자 기능 확장
+- 정적 서비스에서 실시간 서비스 구조로 확장
+
+---
+
+## Retrospective
+
+이 프로젝트는 실제 동아리 운영에서 겪은 문제를 바탕으로, 봉사 공고를 더 빨리 찾고 이해하고 비교할 수 있는 구조를 만드는 데 초점을 맞춘 프로젝트였습니다. 데이터 수집부터 검색 UI, 로컬 LLM 활용, 유사도 기반 추천, 자동 배치 운영까지 하나의 흐름으로 연결해 구현했습니다.

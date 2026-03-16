@@ -95,12 +95,11 @@ def generate_similar_posts(settings: SimilarPostsSettings) -> SimilarPostsRunSum
 
     texts = [_build_similarity_text(item, max_description_chars=settings.max_description_chars) for item in items]
     embeddings = HuggingFaceEmbeddings(
-        model_name=settings.model_name,
+        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         encode_kwargs={
-            "batch_size": settings.batch_size,
             "normalize_embeddings": True,
-            "show_progress_bar": True,
         },
+        show_progress=True,
     )
     documents = [
         Document(page_content=text, metadata={"index": index})

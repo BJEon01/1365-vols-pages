@@ -159,6 +159,74 @@ def _normalize_tags(tags: list[object], *, limit: int) -> list[str]:
     return normalized
 
 
+def _infer_space_tag(item: dict[str, Any]) -> str:
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ("title", "place_text", "description", "activity_type", "target_text")
+    ).lower()
+
+    outdoor_keywords = [
+        "야외",
+        "공원",
+        "광장",
+        "거리",
+        "하천",
+        "강변",
+        "산",
+        "등산",
+        "해변",
+        "바다",
+        "해수욕장",
+        "플로깅",
+        "캠페인",
+        "환경정화",
+        "정화활동",
+        "제설",
+        "농촌",
+        "텃밭",
+        "논",
+        "밭",
+        "순찰",
+    ]
+    indoor_keywords = [
+        "실내",
+        "도서관",
+        "센터",
+        "복지관",
+        "교실",
+        "강의실",
+        "학습",
+        "행정",
+        "사무",
+        "사무실",
+        "병원",
+        "요양원",
+        "경로당",
+        "어린이집",
+        "박물관",
+        "미술관",
+        "체육관",
+        "공동육아방",
+        "소독",
+        "정리",
+        "급식",
+        "배식",
+    ]
+
+    outdoor_score = sum(keyword in text for keyword in outdoor_keywords)
+    indoor_score = sum(keyword in text for keyword in indoor_keywords)
+
+    if outdoor_score > indoor_score:
+        return "실외"
+    return "실내"
+
+
+def _ensure_space_tag(tags: list[str], *, item: dict[str, Any], limit: int) -> list[str]:
+    filtered = [tag for tag in tags if tag not in {"실내", "실외"}]
+    filtered.append(_infer_space_tag(item))
+    return filtered[:limit]
+
+
 def _build_messages(item: dict[str, Any], *, tag_limit: int, max_description_chars: int) -> tuple[str, str]:
     system_prompt = (
         "너는 한국 자원봉사 공고를 짧고 읽기 쉽게 정리하는 도우미다. "
@@ -204,7 +272,8 @@ def _build_messages(item: dict[str, Any], *, tag_limit: int, max_description_cha
         "형태(대면, 비대면, 실내, 실외, 단기, 정기), "
         "역할(학습보조, 멘토링, 캠페인, 안내보조, 말벗, 현장지원). "
         "태그에 기관명 전체 문구, 날짜, 시간, 전화번호, 모집 표현은 넣지 않는다. "
-        "실내/실외 정보는 공고에서 확인 가능할 때만 넣는다. "
+        "실내/실외 태그는 반드시 하나 넣는다. "
+        "공고에 명시가 없더라도 제목, 장소, 활동 내용, 본문을 보고 더 가능성이 높은 쪽으로 추정한다. "
         "근거가 부족한 태그는 넣지 않는다. "
         "너무 추상적인 태그(봉사, 활동, 참여, 모집, 나눔)는 넣지 않는다."
     )
@@ -350,7 +419,11 @@ async def enrich_json_file(settings: AiEnrichmentSettings) -> AiEnrichmentRunSum
 
         if error is None and result is not None:
             item["summary"] = _normalize_summary(result.summary) or None
-            item["tags"] = _normalize_tags(result.tags, limit=settings.tag_limit)
+            item["tags"] = _ensure_space_tag(
+                _normalize_tags(result.tags, limit=settings.tag_limit),
+                item=item,
+                limit=settings.tag_limit,
+            )
             enriched_items += 1
         else:
             failed_items += 1

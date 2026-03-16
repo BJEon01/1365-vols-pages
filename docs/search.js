@@ -120,54 +120,63 @@ function detailHtml(item, similarItems = []) {
   return `
     <div class="detail-stack">
       <section class="detail-grid">
-        <div class="meta-item">
+        <div class="meta-item detail-meta-card">
           <span class="meta-label">기관명</span>
           <span class="meta-value">${escapeHtml(item.organization_name || "-")}</span>
         </div>
-        <div class="meta-item">
+        <div class="meta-item detail-meta-card">
           <span class="meta-label">지역/장소</span>
           <span class="meta-value">${escapeHtml(formatLocation(item))}</span>
         </div>
-        <div class="meta-item">
+        <div class="meta-item detail-meta-card">
           <span class="meta-label">모집 기간</span>
           <span class="meta-value">${escapeHtml(formatDateRange(item.recruit_start_date, item.recruit_end_date))}</span>
         </div>
-        <div class="meta-item">
+        <div class="meta-item detail-meta-card">
           <span class="meta-label">봉사 기간</span>
           <span class="meta-value">${escapeHtml(formatDateRange(item.volunteer_date_start, item.volunteer_date_end))}</span>
         </div>
-        <div class="meta-item">
+        <div class="meta-item detail-meta-card">
           <span class="meta-label">시간</span>
           <span class="meta-value">${escapeHtml(formatTimeRange(item.start_time, item.end_time, item.time_text))}</span>
         </div>
-        <div class="meta-item">
+        <div class="meta-item detail-meta-card">
           <span class="meta-label">모집 인원</span>
           <span class="meta-value">${escapeHtml(item.recruit_count ?? "-")}</span>
         </div>
       </section>
-      <section class="detail-block">
-        <div class="meta-item">
+      <section class="detail-link-card">
+        <div class="detail-link-copy">
           <span class="meta-label">원문 링크</span>
-          <span class="meta-value"><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">${escapeHtml(item.source_url)}</a></span>
+          <p class="detail-link-url">${escapeHtml(item.source_url)}</p>
         </div>
+        <a class="detail-link-button" href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">원문 열기</a>
       </section>
-      <section class="detail-section">
-        <h3 class="detail-section-title">AI 요약</h3>
-        <p class="detail-summary">${escapeHtml(item.summary || "AI 요약을 준비 중입니다.")}</p>
-      </section>
-      <section class="detail-section">
-        <h3 class="detail-section-title">태그</h3>
-        ${
-          tags.length
-            ? `<div class="tag-list">${tags
-                .map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`)
-                .join("")}</div>`
-            : `<p class="detail-placeholder">태그를 준비 중입니다.</p>`
-        }
-      </section>
-      <section class="detail-section">
-        <h3 class="detail-section-title">비슷한 봉사 추천</h3>
-        ${similarContent}
+      <section class="detail-ai-panel" aria-label="AI recommendation section">
+        <div class="detail-ai-panel__head">
+          <h3 class="detail-ai-panel__title">AI 추천정보</h3>
+          <p class="detail-ai-panel__description">공고 이해를 돕는 보조 정보입니다.</p>
+        </div>
+        <div class="detail-ai-panel__body">
+          <section class="detail-section detail-section--compact">
+            <h4 class="detail-section-title">요약</h4>
+            <p class="detail-summary">${escapeHtml(item.summary || "AI 요약을 준비 중입니다.")}</p>
+          </section>
+          <section class="detail-section detail-section--compact">
+            <h4 class="detail-section-title">태그</h4>
+            ${
+              tags.length
+                ? `<div class="tag-list">${tags
+                    .map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`)
+                    .join("")}</div>`
+                : `<p class="detail-placeholder">태그를 준비 중입니다.</p>`
+            }
+          </section>
+          <section class="detail-section detail-section--compact">
+            <h4 class="detail-section-title">비슷한 봉사 추천</h4>
+            ${similarContent}
+          </section>
+        </div>
       </section>
     </div>
   `;

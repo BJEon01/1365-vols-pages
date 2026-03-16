@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-from sentence_transformers import SentenceTransformer
+from langchain_core.documents import Document
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
 from tqdm import tqdm
 
 
@@ -85,19 +86,6 @@ def _build_similarity_text(item: dict[str, Any], *, max_description_chars: int) 
     return "\n".join(part for part in text_parts if part)
 
 
-def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    return embeddings / norms
-
-
-def _top_similar_indices(similarities: np.ndarray, current_index: int, top_k: int) -> list[int]:
-    similarities[current_index] = -1.0
-    top_indices = np.argpartition(similarities, -top_k)[-top_k:]
-    top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
-    return [int(index) for index in top_indices if similarities[index] > 0]
-
-
 def generate_similar_posts(settings: SimilarPostsSettings) -> SimilarPostsRunSummary:
     payload = _read_payload(settings.input_json_path)
     items = payload["items"]
@@ -106,20 +94,37 @@ def generate_similar_posts(settings: SimilarPostsSettings) -> SimilarPostsRunSum
         return SimilarPostsRunSummary(total_items=0, processed_items=0, output_path=settings.output_json_path)
 
     texts = [_build_similarity_text(item, max_description_chars=settings.max_description_chars) for item in items]
-    model = SentenceTransformer(settings.model_name)
-    embeddings = model.encode(
-        texts,
-        batch_size=settings.batch_size,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=False,
+    embeddings = HuggingFaceEmbeddings(
+        model_name=settings.model_name,
+        encode_kwargs={
+            "batch_size": settings.batch_size,
+            "normalize_embeddings": True,
+            "show_progress_bar": True,
+        },
     )
-    normalized = _normalize_embeddings(np.asarray(embeddings, dtype=np.float32))
-    similarity_matrix = normalized @ normalized.T
+    documents = [
+        Document(page_content=text, metadata={"index": index})
+        for index, text in enumerate(texts)
+    ]
+    vector_store = FAISS.from_documents(documents, embeddings)
+    retriever = vector_store.as_retriever(
+        search_kwargs={"k": min(len(items), settings.top_k + 1)}
+    )
 
     for index, item in enumerate(tqdm(items, desc="Similar posts", unit="post")):
-        similar_indices = _top_similar_indices(similarity_matrix[index].copy(), index, settings.top_k)
-        item["similar_post_ids"] = [str(items[similar_index].get("id") or items[similar_index].get("source_post_id")) for similar_index in similar_indices]
+        results = retriever.invoke(texts[index])
+        similar_post_ids: list[str] = []
+        for result in results:
+            similar_index = int(result.metadata.get("index", -1))
+            if similar_index < 0 or similar_index == index:
+                continue
+            similar_post_id = str(items[similar_index].get("id") or items[similar_index].get("source_post_id") or "").strip()
+            if not similar_post_id or similar_post_id in similar_post_ids:
+                continue
+            similar_post_ids.append(similar_post_id)
+            if len(similar_post_ids) >= settings.top_k:
+                break
+        item["similar_post_ids"] = similar_post_ids
 
     _write_payload(settings.output_json_path, payload)
     return SimilarPostsRunSummary(

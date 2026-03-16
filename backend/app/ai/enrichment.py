@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from tqdm import tqdm
@@ -231,6 +231,23 @@ def _parse_json_text(content: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
+def _message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if isinstance(part, dict):
+                text = str(part.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(part for part in parts if part).strip()
+    return str(content or "").strip()
+
+
 async def _generate_summary_tags_openai(
     llm: ChatOpenAI,
     item: dict[str, Any],
@@ -252,8 +269,7 @@ async def _generate_summary_tags_openai(
 
 
 async def _generate_summary_tags_ollama(
-    client: httpx.AsyncClient,
-    settings: AiEnrichmentSettings,
+    llm: ChatOllama,
     item: dict[str, Any],
     *,
     tag_limit: int,
@@ -264,24 +280,13 @@ async def _generate_summary_tags_ollama(
         tag_limit=tag_limit,
         max_description_chars=max_description_chars,
     )
-    response = await client.post(
-        f"{settings.ollama_base_url}/api/chat",
-        json={
-            "model": settings.model,
-            "stream": False,
-            "format": "json",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "options": {
-                "temperature": settings.temperature,
-            },
-        },
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ]
     )
-    response.raise_for_status()
-    payload = response.json()
-    content = str(payload.get("message", {}).get("content") or "").strip()
+    content = _message_content_to_text(response.content)
     parsed = _parse_json_text(content)
     return SummaryTagsResult.model_validate(parsed)
 
@@ -301,10 +306,15 @@ async def enrich_json_file(settings: AiEnrichmentSettings) -> AiEnrichmentRunSum
     llm = None
     if settings.provider == "openai":
         llm = ChatOpenAI(model=settings.model, temperature=settings.temperature)
+    elif settings.provider == "ollama":
+        llm = ChatOllama(
+            model=settings.model,
+            base_url=settings.ollama_base_url,
+            temperature=settings.temperature,
+            format="json",
+            timeout=settings.ollama_timeout_seconds,
+        )
     semaphore = asyncio.Semaphore(settings.concurrency)
-    ollama_client = None
-    if settings.provider == "ollama":
-        ollama_client = httpx.AsyncClient(timeout=settings.ollama_timeout_seconds)
 
     enriched_items = 0
     failed_items = 0
@@ -316,8 +326,7 @@ async def enrich_json_file(settings: AiEnrichmentSettings) -> AiEnrichmentRunSum
             async with semaphore:
                 if settings.provider == "ollama":
                     result = await _generate_summary_tags_ollama(
-                        ollama_client,
-                        settings,
+                        llm,
                         item,
                         tag_limit=settings.tag_limit,
                         max_description_chars=settings.max_description_chars,
@@ -371,8 +380,6 @@ async def enrich_json_file(settings: AiEnrichmentSettings) -> AiEnrichmentRunSum
             targets_only=settings.output_only_targets,
         ),
     )
-    if ollama_client is not None:
-        await ollama_client.aclose()
     return AiEnrichmentRunSummary(
         total_items=len(items),
         target_items=len(targets),

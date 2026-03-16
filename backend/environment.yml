@@ -14,7 +14,11 @@ dependencies:
       - httpx
       - python-dotenv
       - langchain-core
+      - langchain-community
+      - langchain-huggingface
+      - langchain-ollama
       - langchain-openai
       - tqdm
       - sentence-transformers
       - numpy
+      - faiss-cpu

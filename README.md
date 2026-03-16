@@ -1,4 +1,4 @@
-# 🌱 1365 Vols Pages
+# 🌱 1365-volunteer-matcher
 
 🔗 **Live Demo**: https://bjeon01.github.io/1365-vols-pages/
 

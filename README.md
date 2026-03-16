@@ -1,6 +1,6 @@
 # 🌱 1365-volunteer-matcher
 
-🔗 **Live Demo**: https://bjeon01.github.io/1365-vols-pages/
+🔗 **Live Demo**: https://bjeon01.github.io/1365-volunteer-matcher/
 
 서울 지역 1365 봉사 공고를 수집·가공해, 모집/신청 인원, 지역, 날짜, 키워드 기준으로 빠르게 검색할 수 있도록 만든 봉사 탐색 서비스입니다. 공고를 더 빠르게 이해하고 이어서 탐색할 수 있도록 로컬 LLM 기반 요약·태그 생성과 유사 공고 추천 기능도 함께 구현했습니다.
 

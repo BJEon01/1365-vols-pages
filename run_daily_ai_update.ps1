@@ -1,9 +1,14 @@
+param(
+  [int]$BatchSize = 0
+)
+
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir = Join-Path $RepoRoot "backend"
 $ModelName = "gemma3:4b-it-qat"
 $EnvName = "1365-backend"
+$Concurrency = 2
 $AllowedDirtyPaths = @(
   "docs/data/volunteer_posts.json",
   "run_daily_ai_update.ps1",
@@ -76,9 +81,37 @@ function Invoke-GitChecked {
   }
 }
 
+function Resolve-BatchSize {
+  param(
+    [int]$ConfiguredBatchSize
+  )
+
+  if ($ConfiguredBatchSize -gt 0) {
+    return $ConfiguredBatchSize
+  }
+
+  if ($ConfiguredBatchSize -lt 0) {
+    throw "Batch size must be a positive integer."
+  }
+
+  $batchInput = Read-Host "Enter batch size (blank = all remaining items)"
+  if ([string]::IsNullOrWhiteSpace($batchInput)) {
+    return 0
+  }
+
+  $parsedValue = 0
+  if (-not [int]::TryParse($batchInput, [ref]$parsedValue) -or $parsedValue -le 0) {
+    throw "Batch size must be a positive integer."
+  }
+
+  return $parsedValue
+}
+
 Write-Host "[1/6] Checking local workspace..."
 Push-Location $RepoRoot
 try {
+  $BatchSize = Resolve-BatchSize -ConfiguredBatchSize $BatchSize
+
   Write-Host "  - checking git status"
   $dirtyPaths = Get-DirtyPaths
   if ($dirtyPaths.Count -gt 0) {
@@ -121,12 +154,22 @@ try {
   try {
     $env:AI_PROVIDER = "ollama"
     $env:OLLAMA_MODEL = $ModelName
-    $env:AI_CONCURRENCY = "1"
-    Remove-Item Env:AI_BATCH_LIMIT -ErrorAction SilentlyContinue
+    $env:AI_CONCURRENCY = "$Concurrency"
+    if ($BatchSize -gt 0) {
+      $env:AI_BATCH_LIMIT = "$BatchSize"
+    } else {
+      Remove-Item Env:AI_BATCH_LIMIT -ErrorAction SilentlyContinue
+    }
     Remove-Item Env:AI_FORCE_REGENERATE -ErrorAction SilentlyContinue
     Remove-Item Env:AI_OUTPUT_JSON_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:AI_OUTPUT_ONLY_TARGETS -ErrorAction SilentlyContinue
 
+    if ($BatchSize -gt 0) {
+      Write-Host "  - batch size: $BatchSize"
+    } else {
+      Write-Host "  - batch size: all remaining items"
+    }
+    Write-Host "  - concurrency: $Concurrency"
     & $pythonExe "scripts/enrich_ai_fields.py"
     if ($LASTEXITCODE -ne 0) {
       throw "AI enrichment failed with exit code $LASTEXITCODE"

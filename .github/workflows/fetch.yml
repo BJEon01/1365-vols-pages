@@ -9,7 +9,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: write
     concurrency:
@@ -30,6 +30,8 @@ jobs:
       H1365_DETAIL_CONCURRENCY: "12"
       H1365_MAX_DETAIL: "all"
       H1365_REQUEST_TIMEOUT_SECONDS: "20"
+      H1365_DETAIL_RETRIES: "1"
+      H1365_DETAIL_RETRY_BACKOFF_SECONDS: "1"
       ENABLE_DB_SYNC: "false"
       SIMILAR_TOP_K: "20"
       SIMILAR_BATCH_SIZE: "64"

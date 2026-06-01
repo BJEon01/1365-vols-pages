@@ -43,6 +43,8 @@ def main() -> None:
     print(f"  detail checked: {summary.detail_checked_count}")
     print(f"  detail recruit updates: {summary.detail_recruit_updates}")
     print(f"  detail applied updates: {summary.detail_applied_updates}")
+    print(f"  detail failures: {summary.detail_failed_count}")
+    print(f"  detail cache fallbacks: {summary.detail_cache_fallbacks}")
 
 
 if __name__ == "__main__":

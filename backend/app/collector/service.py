@@ -53,6 +53,8 @@ class CollectorSettings:
     max_detail: int | None = 300
     detail_cache_path: Path | None = DEFAULT_DETAIL_CACHE_PATH
     request_timeout_seconds: float = 20.0
+    detail_retries: int = 2
+    detail_retry_backoff_seconds: float = 1.0
 
     @classmethod
     def from_env(cls) -> "CollectorSettings":
@@ -89,6 +91,11 @@ class CollectorSettings:
                 else DEFAULT_DETAIL_CACHE_PATH
             ),
             request_timeout_seconds=float(os.getenv("H1365_REQUEST_TIMEOUT_SECONDS", "20")),
+            detail_retries=max(0, int(os.getenv("H1365_DETAIL_RETRIES", "2"))),
+            detail_retry_backoff_seconds=max(
+                0.0,
+                float(os.getenv("H1365_DETAIL_RETRY_BACKOFF_SECONDS", "1")),
+            ),
         )
 
 
@@ -100,6 +107,8 @@ class SyncSummary:
     detail_checked_count: int
     detail_recruit_updates: int
     detail_applied_updates: int
+    detail_failed_count: int
+    detail_cache_fallbacks: int
 
 
 def _serialize_value(value: object) -> object:
@@ -167,7 +176,16 @@ def _merge_existing_ai_fields(
         if existing_value and not str(merged.get(field_name) or "").strip():
             merged[field_name] = existing_value
 
+    for field_name in ("recruit_count", "applied_count"):
+        existing_value = existing_item.get(field_name)
+        if existing_value is not None and merged.get(field_name) is None:
+            merged[field_name] = existing_value
+
     return merged
+
+
+def _has_required_counts(item: dict[str, object]) -> bool:
+    return item.get("recruit_count") is not None and item.get("applied_count") is not None
 
 
 def export_records_to_json(records: list[dict[str, object]], output_path: str | os.PathLike[str]) -> Path:
@@ -189,6 +207,13 @@ def export_records_to_json(records: list[dict[str, object]], output_path: str | 
         serialized.setdefault("similar_post_ids", [])
         serialized = _merge_existing_ai_fields(serialized, existing_items.get(source_post_id))
         items.append(serialized)
+
+    existing_usable_count = sum(_has_required_counts(item) for item in existing_items.values())
+    usable_count = sum(_has_required_counts(item) for item in items)
+    if existing_usable_count and not usable_count:
+        raise RuntimeError(
+            "refusing to overwrite volunteer_posts.json: detail collection produced zero usable posts"
+        )
 
     payload = {
         "updatedAt": exported_at,
@@ -417,15 +442,32 @@ class Volunteer1365Client:
         return _parse_body(response.text, response.headers.get("content-type", ""))
 
     async def fetch_detail_fields(self, source_post_id: str) -> tuple[str, str, str, str, str]:
-        response = await self._client.get(
-            DETAIL_ENDPOINT,
-            params={
-                "type": "show",
-                "progrmRegistNo": source_post_id,
-            },
-        )
-        response.raise_for_status()
-        return _extract_detail_fields(response.text)
+        last_error: Exception | None = None
+        for attempt in range(self.settings.detail_retries + 1):
+            try:
+                response = await self._client.get(
+                    DETAIL_ENDPOINT,
+                    params={
+                        "type": "show",
+                        "progrmRegistNo": source_post_id,
+                    },
+                    headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Referer": "https://www.1365.go.kr/vols/main.do",
+                    },
+                )
+                response.raise_for_status()
+                fields = _extract_detail_fields(response.text)
+                if not fields[1]:
+                    raise ValueError("detail page did not contain applied count")
+                return fields
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+                if attempt >= self.settings.detail_retries:
+                    raise
+                await asyncio.sleep(self.settings.detail_retry_backoff_seconds * (2**attempt))
+
+        raise RuntimeError(f"detail fetch failed for {source_post_id}") from last_error
 
 
 async def _collect_raw_items_for_keyword(
@@ -482,22 +524,27 @@ async def _enrich_detail_counts(
     concurrency: int,
     max_detail: int | None,
     cache_path: Path | None,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int, int]:
     detail_targets = items[:max_detail] if max_detail is not None else items
     semaphore = asyncio.Semaphore(max(1, concurrency))
     recruit_updates = 0
     applied_updates = 0
+    failed_count = 0
+    cache_fallbacks = 0
+    error_samples: list[str] = []
     detail_cache = _load_detail_cache(cache_path)
 
     async def enrich(item: dict[str, object]) -> None:
-        nonlocal recruit_updates, applied_updates
+        nonlocal recruit_updates, applied_updates, failed_count, cache_fallbacks
         source_post_id = str(item.get("progrmRegistNo") or "").strip()
         if not source_post_id:
             return
 
         cache_entry = detail_cache.get(source_post_id)
+        cached_applied = ""
         if cache_entry:
             cached_recruit = cache_entry.get("recruit") or ""
+            cached_applied = cache_entry.get("applied") or ""
             if cached_recruit and not str(item.get("rcritNmpr") or "").strip():
                 item["rcritNmpr"] = cached_recruit
 
@@ -510,7 +557,13 @@ async def _enrich_detail_counts(
                 recruit_value, applied_value, description_text, target_text, activity_type = (
                     await client.fetch_detail_fields(source_post_id)
                 )
-        except Exception:
+        except Exception as exc:
+            failed_count += 1
+            if cached_applied and not str(item.get("aplyNmpr") or "").strip():
+                item["aplyNmpr"] = cached_applied
+                cache_fallbacks += 1
+            if len(error_samples) < 5:
+                error_samples.append(f"{source_post_id}: {type(exc).__name__}: {exc}")
             return
 
         if recruit_value and not str(item.get("rcritNmpr") or "").strip():
@@ -519,6 +572,9 @@ async def _enrich_detail_counts(
         if applied_value:
             item["aplyNmpr"] = applied_value
             applied_updates += 1
+        elif cached_applied and not str(item.get("aplyNmpr") or "").strip():
+            item["aplyNmpr"] = cached_applied
+            cache_fallbacks += 1
         if description_text:
             item["descriptionText"] = description_text
         elif existing_description:
@@ -540,7 +596,11 @@ async def _enrich_detail_counts(
 
     await asyncio.gather(*(enrich(item) for item in detail_targets))
     _write_detail_cache(cache_path, detail_cache)
-    return len(detail_targets), recruit_updates, applied_updates
+    if error_samples:
+        print("1365 detail fetch error samples:")
+        for error_sample in error_samples:
+            print(f"  - {error_sample}")
+    return len(detail_targets), recruit_updates, applied_updates, failed_count, cache_fallbacks
 
 
 async def sync_live_posts(
@@ -554,9 +614,17 @@ async def sync_live_posts(
         detail_checked_count = 0
         detail_recruit_updates = 0
         detail_applied_updates = 0
+        detail_failed_count = 0
+        detail_cache_fallbacks = 0
 
         if settings.enrich_detail_counts and raw_items:
-            detail_checked_count, detail_recruit_updates, detail_applied_updates = await _enrich_detail_counts(
+            (
+                detail_checked_count,
+                detail_recruit_updates,
+                detail_applied_updates,
+                detail_failed_count,
+                detail_cache_fallbacks,
+            ) = await _enrich_detail_counts(
                 client,
                 raw_items,
                 concurrency=settings.detail_concurrency,
@@ -575,4 +643,6 @@ async def sync_live_posts(
         detail_checked_count=detail_checked_count,
         detail_recruit_updates=detail_recruit_updates,
         detail_applied_updates=detail_applied_updates,
+        detail_failed_count=detail_failed_count,
+        detail_cache_fallbacks=detail_cache_fallbacks,
     )
